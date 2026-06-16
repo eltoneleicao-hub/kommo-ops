@@ -16,7 +16,7 @@ const productPayloadSchema = z.object({
 export async function GET() {
   const products = await prisma.product.findMany({
     orderBy: { name: "asc" },
-    include: { balances: true },
+    include: { StockBalance: true },
   });
 
   return NextResponse.json(products);

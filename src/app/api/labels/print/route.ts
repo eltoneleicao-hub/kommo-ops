@@ -47,28 +47,28 @@ export async function POST(request: NextRequest) {
     // 1. Buscar label no banco
     const label = await prisma.label.findUnique({
       where: { id: labelId },
-      include: { request: true },
+      include: { MaterialRequest: true },
     });
 
     if (!label) {
       return NextResponse.json({ error: "label_not_found" }, { status: 404 });
     }
 
-    if (!label.request) {
+    if (!label.MaterialRequest) {
       return NextResponse.json({ error: "request_not_found" }, { status: 404 });
     }
 
     // 2. Montar dados de entrada para ZPL
     const input = {
-      recipientName: label.request.recipientName,
-      recipientPhone: label.request.recipientPhone,
-      street: label.request.street,
-      number: label.request.number,
-      neighborhood: label.request.neighborhood,
-      postalCode: label.request.postalCode,
-      city: label.request.city,
-      complement: label.request.complement,
-      internalOrderNotes: label.request.internalOrderNotes,
+      recipientName: label.MaterialRequest.recipientName,
+      recipientPhone: label.MaterialRequest.recipientPhone,
+      street: label.MaterialRequest.street,
+      number: label.MaterialRequest.number,
+      neighborhood: label.MaterialRequest.neighborhood,
+      postalCode: label.MaterialRequest.postalCode,
+      city: label.MaterialRequest.city,
+      complement: label.MaterialRequest.complement,
+      internalOrderNotes: label.MaterialRequest.internalOrderNotes,
     };
 
     // 3. Normalizar endereço (fallback para campos combinados)
