@@ -1,8 +1,14 @@
 import { NextResponse } from "next/server";
+import type { NextRequest } from "next/server";
 import { z } from "zod";
 import { renderLabelText, validateLabelInput } from "@/domain/labels";
 import { getRequestStatusForMissingFields } from "@/domain/requests";
 import { prisma } from "@/lib/prisma";
+import { withCors, corsPreflight } from "@/lib/cors";
+
+export async function OPTIONS(request: NextRequest) {
+  return corsPreflight(request.headers.get("origin"));
+}
 
 const requiredIdentityField = z.string().trim().min(1);
 const optionalTextField = z
@@ -31,21 +37,22 @@ const requestPayloadSchema = z.object({
 });
 
 export async function POST(request: Request) {
+  const origin = request.headers.get("origin");
   const parsedPayload = requestPayloadSchema.safeParse(await request.json().catch(() => null));
 
   if (!parsedPayload.success) {
-    return NextResponse.json({ error: "invalid_payload" }, { status: 400 });
+    return withCors(NextResponse.json({ error: "invalid_payload" }, { status: 400 }), origin);
   }
 
   const payload = parsedPayload.data;
   const webhookSecret = process.env.KOMMO_WEBHOOK_SECRET;
 
   if (!webhookSecret) {
-    return NextResponse.json({ error: "server_misconfigured" }, { status: 500 });
+    return withCors(NextResponse.json({ error: "server_misconfigured" }, { status: 500 }), origin);
   }
 
   if (payload.secret !== webhookSecret) {
-    return NextResponse.json({ error: "unauthorized" }, { status: 401 });
+    return withCors(NextResponse.json({ error: "unauthorized" }, { status: 401 }), origin);
   }
 
   const labelInput = {
@@ -225,5 +232,5 @@ export async function POST(request: Request) {
     };
   });
 
-  return NextResponse.json(result);
+  return withCors(NextResponse.json(result), origin);
 }

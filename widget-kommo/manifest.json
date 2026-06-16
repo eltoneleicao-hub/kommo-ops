@@ -1,36 +1,43 @@
 {
-  "name": "Gerar Etiqueta",
-  "code": "gerar-etiqueta-widget",
-  "version": "1.0.0",
-  "permissions": [
-    "crm.lead.read",
-    "crm.lead.write"
-  ],
-  "placement": [
-    "lead_card"
-  ],
+  "widget": {
+    "name": "widget.name",
+    "description": "widget.description",
+    "short_description": "widget.short_description",
+    "version": "1.0.2",
+    "interface_version": 2,
+    "init_once": false,
+    "locale": ["pt", "en", "es"],
+    "installation": true,
+    "support": {
+      "link": "https://kommo-ops.vercel.app",
+      "email": "willianmario.ia@gmail.com"
+    }
+  },
+  "locations": ["settings", "lcard-1"],
+  "tour": {
+    "is_tour": true,
+    "tour_images": {
+      "pt": ["/images/slideshow_1_pt.jpg"],
+      "en": ["/images/slideshow_1_en.jpg"],
+      "es": ["/images/slideshow_1_es.jpg"]
+    },
+    "tour_description": "widget.tour_description"
+  },
   "settings": {
     "api_url": {
+      "name": "settings.api_url",
       "type": "text",
-      "title": "URL da API",
-      "description": "URL base do sistema (ex: https://kommo-ops.vercel.app)",
       "required": true
     },
     "api_key": {
-      "type": "password",
-      "title": "API Key",
-      "description": "Chave de autenticação (KOMMO_WEBHOOK_SECRET)",
+      "name": "settings.api_key",
+      "type": "pass",
       "required": true
     },
     "pipeline_id": {
+      "name": "settings.pipeline_id",
       "type": "text",
-      "title": "ID do Pipeline",
-      "description": "Apenas leads deste pipeline poderão gerar etiquetas (ex: 13930188)",
       "required": true
     }
-  },
-  "scopes": [
-    "crm.lead.read",
-    "crm.lead.write"
-  ]
+  }
 }
