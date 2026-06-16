@@ -1,0 +1,32 @@
+# Dependencies
+node_modules/
+
+# Build
+.next/
+dist/
+build/
+
+# Environment (NUNCA commitar!)
+.env
+.env.local
+.env.production
+
+# Logs
+*.log
+npm-debug.log*
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+
+# Prisma
+prisma/migrations/dev/
+
+# Temp
+*.tmp
+zpl-output/
+C:\temp\

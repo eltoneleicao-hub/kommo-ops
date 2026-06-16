@@ -1,0 +1,160 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model AutomationLog {
+  id           String   @id
+  workflowName String
+  sourceRef    String?
+  status       String
+  payload      Json?
+  error        String?
+  createdAt    DateTime @default(now())
+}
+
+model KommoFieldMapping {
+  id         String   @id
+  label      String   @unique
+  entityType String
+  fieldId    Int
+  required   Boolean  @default(true)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime
+}
+
+model Label {
+  id              String          @id
+  requestId       String          @unique
+  format          String
+  content         String
+  filePath        String?
+  printStatus     PrintStatus     @default(pendente)
+  printedAt       DateTime?
+  createdAt       DateTime        @default(now())
+  MaterialRequest MaterialRequest @relation(fields: [requestId], references: [id])
+}
+
+model MaterialRequest {
+  id                  String                @id
+  source              RequestSource
+  kommoLeadId         String?
+  kommoContactId      String?
+  kommoPipelineId     String?
+  kommoStageId        String?
+  status              RequestStatus         @default(recebido)
+  missingFields       String[]              @default([])
+  recipientName       String?
+  recipientPhone      String?
+  street              String?
+  number              String?
+  neighborhood        String?
+  postalCode          String?
+  city                String?
+  complement          String?
+  internalOrderNotes  String?
+  kommoUrl            String?
+  createdAt           DateTime              @default(now())
+  updatedAt           DateTime
+  Label               Label?
+  MaterialRequestItem MaterialRequestItem[]
+
+  @@unique([kommoLeadId, kommoPipelineId, kommoStageId])
+}
+
+model MaterialRequestItem {
+  id              String          @id
+  requestId       String
+  productId       String
+  qty             Int
+  status          String          @default("pendente")
+  createdAt       DateTime        @default(now())
+  updatedAt       DateTime
+  Product         Product         @relation(fields: [productId], references: [id])
+  MaterialRequest MaterialRequest @relation(fields: [requestId], references: [id])
+}
+
+model Product {
+  id                  String                @id
+  sku                 String                @unique
+  name                String
+  category            String?
+  unit                String                @default("un")
+  minStock            Int                   @default(0)
+  active              Boolean               @default(true)
+  createdAt           DateTime              @default(now())
+  updatedAt           DateTime
+  MaterialRequestItem MaterialRequestItem[]
+  StockBalance        StockBalance[]
+  StockMovement       StockMovement[]
+}
+
+model StockBalance {
+  productId     String
+  locationId    String
+  availableQty  Int           @default(0)
+  reservedQty   Int           @default(0)
+  updatedAt     DateTime
+  StockLocation StockLocation @relation(fields: [locationId], references: [id])
+  Product       Product       @relation(fields: [productId], references: [id])
+
+  @@id([productId, locationId])
+}
+
+model StockLocation {
+  id            String          @id
+  name          String
+  active        Boolean         @default(true)
+  createdAt     DateTime        @default(now())
+  updatedAt     DateTime
+  StockBalance  StockBalance[]
+  StockMovement StockMovement[]
+}
+
+model StockMovement {
+  id            String        @id
+  productId     String
+  locationId    String
+  type          MovementType
+  qty           Int
+  reason        String?
+  source        String
+  sourceRef     String?
+  createdBy     String?
+  createdAt     DateTime      @default(now())
+  StockLocation StockLocation @relation(fields: [locationId], references: [id])
+  Product       Product       @relation(fields: [productId], references: [id])
+}
+
+enum MovementType {
+  entrada
+  reserva
+  baixa
+  cancelamento_reserva
+  ajuste
+}
+
+enum PrintStatus {
+  pendente
+  impresso
+  erro
+}
+
+enum RequestSource {
+  kommo
+  manual
+}
+
+enum RequestStatus {
+  recebido
+  campos_incompletos
+  pronto_para_etiqueta
+  etiqueta_gerada
+  impresso
+  erro
+  cancelado
+}

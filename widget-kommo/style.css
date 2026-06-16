@@ -1,0 +1,89 @@
+/* Widget Kommo - Gerar Etiqueta (v2) */
+
+#kommo-widget-container {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+}
+
+/* Botões */
+#kommo-widget-generate-single,
+#kommo-widget-generate-batch {
+  font-weight: 600;
+  letter-spacing: 0.5px;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+  transition: all 0.2s ease-out;
+}
+
+#kommo-widget-generate-single:hover,
+#kommo-widget-generate-batch:hover {
+  box-shadow: 0 4px 8px rgba(0, 0, 0, 0.15);
+  transform: translateY(-1px);
+}
+
+#kommo-widget-generate-single:active,
+#kommo-widget-generate-batch:active {
+  transform: translateY(0);
+}
+
+/* Status Message */
+#kommo-widget-status {
+  line-height: 1.5;
+  animation: slideIn 0.3s ease-out;
+}
+
+@keyframes slideIn {
+  from {
+    opacity: 0;
+    transform: translateY(-8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* Modal Backdrop */
+#kommo-widget-modal {
+  animation: fadeIn 0.2s ease-out;
+}
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+/* Modal Content */
+#kommo-widget-modal > div {
+  animation: slideUp 0.3s ease-out;
+}
+
+@keyframes slideUp {
+  from {
+    opacity: 0;
+    transform: translateY(20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* Success Pulse */
+#kommo-widget-status strong[style*="color: #4CAF50"] {
+  animation: pulse 0.6s ease-out;
+}
+
+@keyframes pulse {
+  0% {
+    text-shadow: 0 0 0 0 rgba(76, 175, 80, 0.7);
+  }
+  70% {
+    text-shadow: 0 0 0 8px rgba(76, 175, 80, 0);
+  }
+  100% {
+    text-shadow: 0 0 0 0 rgba(76, 175, 80, 0);
+  }
+}

@@ -1,0 +1,30 @@
+{
+  "name": "Gerar Etiqueta",
+  "code": "gerar-etiqueta-widget",
+  "version": "1.0.0",
+  "permissions": [
+    "crm.lead.read",
+    "crm.lead.write"
+  ],
+  "placement": [
+    "lead_card"
+  ],
+  "settings": {
+    "api_url": {
+      "type": "text",
+      "title": "URL da API",
+      "description": "URL base do seu sistema (ex: https://seu-tunnel.trycloudflare.com)",
+      "required": true
+    },
+    "api_key": {
+      "type": "password",
+      "title": "API Key",
+      "description": "Chave de autenticação para o backend",
+      "required": true
+    }
+  },
+  "scopes": [
+    "crm.lead.read",
+    "crm.lead.write"
+  ]
+}
