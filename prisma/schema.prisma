@@ -8,7 +8,7 @@ datasource db {
 }
 
 model AutomationLog {
-  id           String   @id
+  id           String   @id @default(cuid())
   workflowName String
   sourceRef    String?
   status       String
@@ -18,17 +18,17 @@ model AutomationLog {
 }
 
 model KommoFieldMapping {
-  id         String   @id
+  id         String   @id @default(cuid())
   label      String   @unique
   entityType String
   fieldId    Int
   required   Boolean  @default(true)
   createdAt  DateTime @default(now())
-  updatedAt  DateTime
+  updatedAt  DateTime @updatedAt
 }
 
 model Label {
-  id              String          @id
+  id              String          @id @default(cuid())
   requestId       String          @unique
   format          String
   content         String
@@ -40,7 +40,7 @@ model Label {
 }
 
 model MaterialRequest {
-  id                  String                @id
+  id                  String                @id @default(cuid())
   source              RequestSource
   kommoLeadId         String?
   kommoContactId      String?
@@ -59,7 +59,7 @@ model MaterialRequest {
   internalOrderNotes  String?
   kommoUrl            String?
   createdAt           DateTime              @default(now())
-  updatedAt           DateTime
+  updatedAt           DateTime              @updatedAt
   Label               Label?
   MaterialRequestItem MaterialRequestItem[]
 
@@ -67,19 +67,19 @@ model MaterialRequest {
 }
 
 model MaterialRequestItem {
-  id              String          @id
+  id              String          @id @default(cuid())
   requestId       String
   productId       String
   qty             Int
   status          String          @default("pendente")
   createdAt       DateTime        @default(now())
-  updatedAt       DateTime
+  updatedAt       DateTime        @updatedAt
   Product         Product         @relation(fields: [productId], references: [id])
   MaterialRequest MaterialRequest @relation(fields: [requestId], references: [id])
 }
 
 model Product {
-  id                  String                @id
+  id                  String                @id @default(cuid())
   sku                 String                @unique
   name                String
   category            String?
@@ -87,7 +87,7 @@ model Product {
   minStock            Int                   @default(0)
   active              Boolean               @default(true)
   createdAt           DateTime              @default(now())
-  updatedAt           DateTime
+  updatedAt           DateTime              @updatedAt
   MaterialRequestItem MaterialRequestItem[]
   StockBalance        StockBalance[]
   StockMovement       StockMovement[]
@@ -98,7 +98,7 @@ model StockBalance {
   locationId    String
   availableQty  Int           @default(0)
   reservedQty   Int           @default(0)
-  updatedAt     DateTime
+  updatedAt     DateTime      @updatedAt
   StockLocation StockLocation @relation(fields: [locationId], references: [id])
   Product       Product       @relation(fields: [productId], references: [id])
 
@@ -106,17 +106,17 @@ model StockBalance {
 }
 
 model StockLocation {
-  id            String          @id
+  id            String          @id @default(cuid())
   name          String
   active        Boolean         @default(true)
   createdAt     DateTime        @default(now())
-  updatedAt     DateTime
+  updatedAt     DateTime        @updatedAt
   StockBalance  StockBalance[]
   StockMovement StockMovement[]
 }
 
 model StockMovement {
-  id            String        @id
+  id            String        @id @default(cuid())
   productId     String
   locationId    String
   type          MovementType
