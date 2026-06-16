@@ -3,8 +3,9 @@ import { prisma } from "@/lib/prisma";
 
 export async function PATCH(
   request: NextRequest,
-  { params }: { params: { id: string } }
+  { params }: { params: Promise<{ id: string }> }
 ) {
+  const { id } = await params;
   const body = await request.json();
 
   if (body.secret !== process.env.KOMMO_WEBHOOK_SECRET) {
@@ -12,7 +13,7 @@ export async function PATCH(
   }
 
   await prisma.label.update({
-    where: { id: params.id },
+    where: { id },
     data: {
       printStatus: "impresso",
       printedAt: new Date(),
