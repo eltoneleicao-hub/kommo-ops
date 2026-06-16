@@ -35,6 +35,7 @@ model Label {
   filePath        String?
   printStatus     PrintStatus     @default(pendente)
   printedAt       DateTime?
+  errorMessage    String?
   createdAt       DateTime        @default(now())
   MaterialRequest MaterialRequest @relation(fields: [requestId], references: [id])
 }
@@ -140,6 +141,7 @@ enum MovementType {
 
 enum PrintStatus {
   pendente
+  processando
   impresso
   erro
 }

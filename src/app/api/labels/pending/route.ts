@@ -17,6 +17,7 @@ export async function GET(request: NextRequest) {
 
   const result = labels.map((label) => ({
     id: label.id,
+    content: label.content,
     recipientName: label.MaterialRequest?.recipientName ?? "",
     street: label.MaterialRequest?.street ?? "",
     number: label.MaterialRequest?.number ?? "",

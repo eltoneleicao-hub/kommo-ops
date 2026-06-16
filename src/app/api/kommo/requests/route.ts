@@ -27,6 +27,7 @@ const requestPayloadSchema = z.object({
   complement: optionalTextField,
   internalOrderNotes: optionalTextField,
   kommoUrl: optionalTextField,
+  deductStock: z.boolean().optional().default(false),
 });
 
 export async function POST(request: Request) {
@@ -68,12 +69,8 @@ export async function POST(request: Request) {
       kommoStageId: payload.kommoStageId,
     };
     const existingMaterialRequest = await tx.materialRequest.findUnique({
-      where: {
-        kommoLeadId_kommoPipelineId_kommoStageId: kommoKey,
-      },
-      include: {
-        Label: true,
-      },
+      where: { kommoLeadId_kommoPipelineId_kommoStageId: kommoKey },
+      include: { Label: true },
     });
 
     if (
@@ -85,13 +82,12 @@ export async function POST(request: Request) {
         status: existingMaterialRequest.status,
         missingFields: existingMaterialRequest.missingFields,
         labelId: existingMaterialRequest.Label?.id ?? null,
+        stockDeducted: false,
       };
     }
 
     const materialRequest = await tx.materialRequest.upsert({
-      where: {
-        kommoLeadId_kommoPipelineId_kommoStageId: kommoKey,
-      },
+      where: { kommoLeadId_kommoPipelineId_kommoStageId: kommoKey },
       create: {
         source: "kommo",
         kommoLeadId: payload.kommoLeadId,
@@ -134,6 +130,7 @@ export async function POST(request: Request) {
         status: requestStatus,
         missingFields,
         labelId: null,
+        stockDeducted: false,
       };
     }
 
@@ -147,13 +144,12 @@ export async function POST(request: Request) {
         status: materialRequest.status,
         missingFields: materialRequest.missingFields,
         labelId: existingLabel.id,
+        stockDeducted: false,
       };
     }
 
     const label = await tx.label.upsert({
-      where: {
-        requestId: materialRequest.id,
-      },
+      where: { requestId: materialRequest.id },
       create: {
         requestId: materialRequest.id,
         format: "text",
@@ -170,11 +166,62 @@ export async function POST(request: Request) {
             data: { status: "etiqueta_gerada" },
           });
 
+    // Dedução de estoque — atomica dentro da mesma transação
+    let stockDeducted = false;
+    if (payload.deductStock) {
+      const sku = process.env.STOCK_PRODUCT_SKU;
+      const locationName = process.env.STOCK_LOCATION_NAME;
+
+      if (sku && locationName) {
+        const [product, location] = await Promise.all([
+          tx.product.findUnique({ where: { sku } }),
+          tx.stockLocation.findFirst({ where: { name: locationName, active: true } }),
+        ]);
+
+        if (!product || !location) {
+          throw new Error(`Estoque não configurado corretamente (SKU: ${sku}, Local: ${locationName})`);
+        }
+
+        const updated = await tx.stockBalance.updateMany({
+          where: {
+            productId: product.id,
+            locationId: location.id,
+            availableQty: { gte: 1 },
+          },
+          data: { availableQty: { decrement: 1 } },
+        });
+
+        if (updated.count === 0) {
+          const balance = await tx.stockBalance.findUnique({
+            where: { productId_locationId: { productId: product.id, locationId: location.id } },
+          });
+          throw new Error(
+            `Estoque insuficiente. Disponível: ${balance?.availableQty ?? 0} convites`
+          );
+        }
+
+        await tx.stockMovement.create({
+          data: {
+            productId: product.id,
+            locationId: location.id,
+            type: "baixa",
+            qty: 1,
+            source: "kommo",
+            sourceRef: payload.kommoLeadId,
+            reason: "Etiqueta gerada via widget",
+          },
+        });
+
+        stockDeducted = true;
+      }
+    }
+
     return {
       requestId: updatedRequest.id,
       status: updatedRequest.status,
       missingFields,
       labelId: label.id,
+      stockDeducted,
     };
   });
 

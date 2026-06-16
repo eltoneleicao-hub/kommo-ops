@@ -1,29 +1,3 @@
-/**
- * Endpoint: POST /api/kommo/requests-batch
- *
- * Gera etiquetas em lote para todos os leads de uma etapa específica
- * que ainda não foram processados.
- *
- * Payload:
- * {
- *   secret: "api-key",
- *   kommoPipelineId: "123",
- *   kommoStageId: "456"
- * }
- *
- * Resposta:
- * {
- *   generated: 5,
- *   incomplete: 2,
- *   total: 7,
- *   results: [
- *     { kommoLeadId: "123", status: "etiqueta_gerada", labelId: "..." },
- *     { kommoLeadId: "124", status: "campos_incompletos", missingFields: [...] },
- *     ...
- *   ]
- * }
- */
-
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { prisma } from "@/lib/prisma";
@@ -34,6 +8,8 @@ const batchPayloadSchema = z.object({
   secret: z.string().min(1),
   kommoPipelineId: z.string().min(1),
   kommoStageId: z.string().min(1),
+  countOnly: z.boolean().optional().default(false),
+  deductStock: z.boolean().optional().default(false),
 });
 
 export async function POST(request: NextRequest) {
@@ -42,35 +18,96 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "invalid_payload" }, { status: 400 });
   }
 
-  // Validar secret
   if (parsed.data.secret !== process.env.KOMMO_WEBHOOK_SECRET) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
 
-  try {
-    const { kommoPipelineId, kommoStageId } = parsed.data;
+  const { kommoPipelineId, kommoStageId, countOnly, deductStock } = parsed.data;
 
-    // Buscar todos os leads da etapa que ainda não foram processados
-    const materialRequests = await prisma.materialRequest.findMany({
-      where: {
-        kommoPipelineId,
-        kommoStageId,
-        // Não processar leads já impressos para evitar duplicação
-        status: {
-          notIn: ["impresso", "cancelado"],
-        },
-      },
-      orderBy: { createdAt: "asc" },
+  const materialRequests = await prisma.materialRequest.findMany({
+    where: {
+      kommoPipelineId,
+      kommoStageId,
+      status: { notIn: ["impresso", "cancelado"] },
+    },
+    orderBy: { createdAt: "asc" },
+  });
+
+  // Modo contagem: apenas informa quantos leads são elegíveis
+  const eligible = materialRequests.filter((r) => {
+    const missing = validateLabelInput({
+      recipientName: r.recipientName,
+      recipientPhone: r.recipientPhone,
+      street: r.street,
+      number: r.number,
+      neighborhood: r.neighborhood,
+      postalCode: r.postalCode,
+      city: r.city,
+      complement: r.complement,
+      internalOrderNotes: r.internalOrderNotes,
     });
+    return missing.length === 0;
+  }).length;
 
-    const results = [];
-    let generated = 0;
-    let incomplete = 0;
+  if (countOnly) {
+    return NextResponse.json({ eligible, total: materialRequests.length });
+  }
 
-    // Processar cada lead em lote
-    for (const materialRequest of materialRequests) {
-      try {
-        const missingFields = validateLabelInput({
+  // Verificar estoque antes de processar (se deductStock solicitado)
+  if (deductStock && eligible > 0) {
+    const sku = process.env.STOCK_PRODUCT_SKU;
+    const locationName = process.env.STOCK_LOCATION_NAME;
+
+    if (sku && locationName) {
+      const product = await prisma.product.findUnique({ where: { sku } });
+      const location = await prisma.stockLocation.findFirst({
+        where: { name: locationName, active: true },
+      });
+
+      if (product && location) {
+        const balance = await prisma.stockBalance.findUnique({
+          where: { productId_locationId: { productId: product.id, locationId: location.id } },
+        });
+        const available = balance?.availableQty ?? 0;
+
+        if (available < eligible) {
+          return NextResponse.json(
+            {
+              error: "insufficient_stock",
+              available,
+              needed: eligible,
+              message: `Estoque insuficiente. Disponível: ${available}, necessário: ${eligible}`,
+            },
+            { status: 409 }
+          );
+        }
+      }
+    }
+  }
+
+  const results = [];
+  let generated = 0;
+  let incomplete = 0;
+  let stockDeducted = 0;
+
+  for (const materialRequest of materialRequests) {
+    try {
+      const missingFields = validateLabelInput({
+        recipientName: materialRequest.recipientName,
+        recipientPhone: materialRequest.recipientPhone,
+        street: materialRequest.street,
+        number: materialRequest.number,
+        neighborhood: materialRequest.neighborhood,
+        postalCode: materialRequest.postalCode,
+        city: materialRequest.city,
+        complement: materialRequest.complement,
+        internalOrderNotes: materialRequest.internalOrderNotes,
+      });
+
+      const status = getRequestStatusForMissingFields(missingFields);
+
+      if (missingFields.length === 0) {
+        const labelContent = renderLabelText({
           recipientName: materialRequest.recipientName,
           recipientPhone: materialRequest.recipientPhone,
           street: materialRequest.street,
@@ -82,23 +119,14 @@ export async function POST(request: NextRequest) {
           internalOrderNotes: materialRequest.internalOrderNotes,
         });
 
-        const status = getRequestStatusForMissingFields(missingFields);
-
-        // Se completo, gerar etiqueta
-        if (missingFields.length === 0) {
-          const labelContent = renderLabelText({
-            recipientName: materialRequest.recipientName,
-            recipientPhone: materialRequest.recipientPhone,
-            street: materialRequest.street,
-            number: materialRequest.number,
-            neighborhood: materialRequest.neighborhood,
-            postalCode: materialRequest.postalCode,
-            city: materialRequest.city,
-            complement: materialRequest.complement,
-            internalOrderNotes: materialRequest.internalOrderNotes,
+        // Cria label + deduz estoque na mesma transação
+        const label = await prisma.$transaction(async (tx) => {
+          const existingLabel = await tx.label.findUnique({
+            where: { requestId: materialRequest.id },
           });
+          if (existingLabel) return existingLabel;
 
-          const label = await prisma.label.create({
+          const newLabel = await tx.label.create({
             data: {
               requestId: materialRequest.id,
               format: "text",
@@ -106,84 +134,94 @@ export async function POST(request: NextRequest) {
             },
           });
 
-          await prisma.materialRequest.update({
+          await tx.materialRequest.update({
             where: { id: materialRequest.id },
             data: { status: "etiqueta_gerada" },
           });
 
-          generated++;
-          results.push({
-            kommoLeadId: materialRequest.kommoLeadId,
-            status: "etiqueta_gerada",
-            labelId: label.id,
-          });
-        } else {
-          // Incompleto: atualizar status mas não criar etiqueta
-          await prisma.materialRequest.update({
-            where: { id: materialRequest.id },
-            data: {
-              status: "campos_incompletos",
-              missingFields,
-            },
-          });
+          if (deductStock) {
+            const sku = process.env.STOCK_PRODUCT_SKU;
+            const locationName = process.env.STOCK_LOCATION_NAME;
+            if (sku && locationName) {
+              const product = await tx.product.findUnique({ where: { sku } });
+              const location = await tx.stockLocation.findFirst({
+                where: { name: locationName, active: true },
+              });
+              if (product && location) {
+                await tx.stockBalance.updateMany({
+                  where: {
+                    productId: product.id,
+                    locationId: location.id,
+                    availableQty: { gte: 1 },
+                  },
+                  data: { availableQty: { decrement: 1 } },
+                });
+                await tx.stockMovement.create({
+                  data: {
+                    productId: product.id,
+                    locationId: location.id,
+                    type: "baixa",
+                    qty: 1,
+                    source: "kommo",
+                    sourceRef: materialRequest.kommoLeadId ?? materialRequest.id,
+                    reason: "Etiqueta gerada via lote",
+                  },
+                });
+                stockDeducted++;
+              }
+            }
+          }
 
-          incomplete++;
-          results.push({
-            kommoLeadId: materialRequest.kommoLeadId,
-            status: "campos_incompletos",
-            missingFields,
-          });
-        }
-      } catch (error) {
-        console.error(
-          `[Batch] Erro ao processar lead ${materialRequest.kommoLeadId}:`,
-          error
-        );
+          return newLabel;
+        });
+
+        generated++;
         results.push({
           kommoLeadId: materialRequest.kommoLeadId,
-          status: "erro",
-          error:
-            error instanceof Error ? error.message : "Erro desconhecido",
+          status: "etiqueta_gerada",
+          labelId: label.id,
+        });
+      } else {
+        await prisma.materialRequest.update({
+          where: { id: materialRequest.id },
+          data: { status: "campos_incompletos", missingFields },
+        });
+        incomplete++;
+        results.push({
+          kommoLeadId: materialRequest.kommoLeadId,
+          status: "campos_incompletos",
+          missingFields,
         });
       }
+    } catch (error) {
+      console.error(`[Batch] Erro ao processar lead ${materialRequest.kommoLeadId}:`, error);
+      results.push({
+        kommoLeadId: materialRequest.kommoLeadId,
+        status: "erro",
+        error: error instanceof Error ? error.message : "Erro desconhecido",
+      });
     }
-
-    const origin = request.headers.get("origin");
-    const response = NextResponse.json({
-      generated,
-      incomplete,
-      total: generated + incomplete,
-      results,
-    });
-
-    // CORS Headers
-    response.headers.set("Access-Control-Allow-Origin", origin || "*");
-    response.headers.set(
-      "Access-Control-Allow-Methods",
-      "POST, OPTIONS"
-    );
-    response.headers.set(
-      "Access-Control-Allow-Headers",
-      "Content-Type, Authorization"
-    );
-
-    return response;
-  } catch (error) {
-    console.error("[Batch] Erro geral:", error);
-    return NextResponse.json(
-      { error: "internal_error" },
-      { status: 500 }
-    );
   }
+
+  const origin = request.headers.get("origin");
+  const response = NextResponse.json({
+    generated,
+    incomplete,
+    total: generated + incomplete,
+    stockDeducted,
+    results,
+  });
+
+  response.headers.set("Access-Control-Allow-Origin", origin || "*");
+  response.headers.set("Access-Control-Allow-Methods", "POST, OPTIONS");
+  response.headers.set("Access-Control-Allow-Headers", "Content-Type, Authorization");
+
+  return response;
 }
 
-/**
- * Handler OPTIONS para preflight CORS
- */
 export async function OPTIONS(request: NextRequest) {
   const origin = request.headers.get("origin");
-
-  return new NextResponse(null, {
+  return new Response(null, {
     status: 200,
     headers: {
       "Access-Control-Allow-Origin": origin || "*",
