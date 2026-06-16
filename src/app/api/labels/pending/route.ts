@@ -10,22 +10,22 @@ export async function GET(request: NextRequest) {
 
   const labels = await prisma.label.findMany({
     where: { printStatus: "pendente" },
-    include: { request: true },
+    include: { MaterialRequest: true },
     orderBy: { createdAt: "asc" },
     take: 10,
   });
 
   const result = labels.map((label) => ({
     id: label.id,
-    recipientName: label.request?.recipientName ?? "",
-    street: label.request?.street ?? "",
-    number: label.request?.number ?? "",
-    complement: label.request?.complement ?? "",
-    neighborhood: label.request?.neighborhood ?? "",
-    city: label.request?.city ?? "",
-    postalCode: label.request?.postalCode ?? "",
-    recipientPhone: label.request?.recipientPhone ?? "",
-    internalOrderNotes: label.request?.internalOrderNotes ?? "",
+    recipientName: label.MaterialRequest?.recipientName ?? "",
+    street: label.MaterialRequest?.street ?? "",
+    number: label.MaterialRequest?.number ?? "",
+    complement: label.MaterialRequest?.complement ?? "",
+    neighborhood: label.MaterialRequest?.neighborhood ?? "",
+    city: label.MaterialRequest?.city ?? "",
+    postalCode: label.MaterialRequest?.postalCode ?? "",
+    recipientPhone: label.MaterialRequest?.recipientPhone ?? "",
+    internalOrderNotes: label.MaterialRequest?.internalOrderNotes ?? "",
   }));
 
   return NextResponse.json(result);

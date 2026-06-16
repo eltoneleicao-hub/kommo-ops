@@ -72,19 +72,19 @@ export async function POST(request: Request) {
         kommoLeadId_kommoPipelineId_kommoStageId: kommoKey,
       },
       include: {
-        label: true,
+        Label: true,
       },
     });
 
     if (
       existingMaterialRequest?.status === "impresso" ||
-      (missingFields.length === 0 && existingMaterialRequest?.label)
+      (missingFields.length === 0 && existingMaterialRequest?.Label)
     ) {
       return {
         requestId: existingMaterialRequest.id,
         status: existingMaterialRequest.status,
         missingFields: existingMaterialRequest.missingFields,
-        labelId: existingMaterialRequest.label?.id ?? null,
+        labelId: existingMaterialRequest.Label?.id ?? null,
       };
     }
 
