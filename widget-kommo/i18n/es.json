@@ -1,0 +1,13 @@
+{
+  "widget": {
+    "name": "Generar Etiqueta",
+    "short_description": "Etiquetas de entrega por mensajero",
+    "description": "Widget para generar etiquetas de entrega por mensajero y controlar el stock de invitaciones.",
+    "tour_description": "Genera etiquetas de entrega directamente desde el lead y controla el stock de invitaciones."
+  },
+  "settings": {
+    "api_url": "URL de la API (ej: https://kommo-ops.vercel.app)",
+    "api_key": "API Key",
+    "pipeline_id": "ID del Pipeline (ej: 13930188)"
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "widget": {
+    "name": "Label Generator",
+    "short_description": "Delivery labels via courier",
+    "description": "Widget to generate delivery labels via courier and control invitation stock.",
+    "tour_description": "Generate delivery labels straight from the lead and control invitation stock."
+  },
+  "settings": {
+    "api_url": "API URL (e.g. https://kommo-ops.vercel.app)",
+    "api_key": "API Key",
+    "pipeline_id": "Pipeline ID (e.g. 13930188)"
+  }
+}

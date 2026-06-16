@@ -5,6 +5,10 @@ node_modules/
 .next/
 dist/
 build/
+*.tsbuildinfo
+
+# Widget package (artefato gerado)
+widget-kommo/*.zip
 
 # Environment (NUNCA commitar!)
 .env
@@ -30,3 +34,6 @@ prisma/migrations/dev/
 *.tmp
 zpl-output/
 C:\temp\
+
+.vercel
+.env*

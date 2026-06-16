@@ -1,0 +1,13 @@
+{
+  "widget": {
+    "name": "Gerar Etiqueta",
+    "short_description": "Etiquetas de entrega via motoboy",
+    "description": "Widget para gerar etiquetas de entrega via motoboy e controlar o estoque de convites.",
+    "tour_description": "Gere etiquetas de entrega direto do lead e controle o estoque de convites."
+  },
+  "settings": {
+    "api_url": "URL da API (ex: https://kommo-ops.vercel.app)",
+    "api_key": "API Key",
+    "pipeline_id": "ID do Pipeline (ex: 13930188)"
+  }
+}

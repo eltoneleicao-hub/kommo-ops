@@ -30,15 +30,48 @@ define(['jquery'], function ($) {
       return '';
     }
 
-    // Lê valor de custom field por nome (estrutura v4: field_name + values[].value)
-    function extractField(fields, name) {
-      if (!fields) return '';
-      for (var i = 0; i < fields.length; i++) {
-        var f = fields[i];
-        var fname = f.field_name || f.name;
-        if (fname === name) {
-          var v = f.values;
-          return (v && v.length) ? String(v[0].value || '') : '';
+    // Normaliza nome de campo: remove acentos, minúsculas, sem espaços extras
+    function norm(s) {
+      return String(s || '')
+        .normalize('NFD').replace(/[̀-ͯ]/g, '')
+        .toLowerCase().replace(/\s+/g, ' ').trim();
+    }
+
+    // Extrai o valor textual de um custom field (lida com values[] do Kommo v4).
+    function fieldValue(f) {
+      var v = f.values || f.value;
+      if (!v) return '';
+      if (Array.isArray(v)) {
+        if (!v.length) return '';
+        var first = v[0];
+        return String((first && first.value != null ? first.value : first) || '');
+      }
+      return String(v || '');
+    }
+
+    // Lê valor de custom field por nome (insensível a acento/maiúsculas).
+    // Casamento em camadas: exato → prefixo → contém. Retorna o 1º valor NÃO vazio.
+    // Isso tolera sufixos do Kommo como "... teste bling" ou "Número da casa".
+    // Aceita lista de nomes alternativos.
+    function extractField(fields, names) {
+      if (!fields || !fields.length) return '';
+      var wanted = (typeof names === 'string' ? [names] : names).map(norm);
+
+      var matchers = [
+        function (fname, w) { return fname === w; },            // exato
+        function (fname, w) { return fname.indexOf(w) === 0; }, // prefixo
+        function (fname, w) { return fname.indexOf(w) >= 0; }   // contém
+      ];
+
+      for (var m = 0; m < matchers.length; m++) {
+        for (var i = 0; i < fields.length; i++) {
+          var fname = norm(fields[i].field_name || fields[i].name);
+          for (var k = 0; k < wanted.length; k++) {
+            if (matchers[m](fname, wanted[k])) {
+              var val = fieldValue(fields[i]);
+              if (val) return val;
+            }
+          }
         }
       }
       return '';
@@ -127,12 +160,50 @@ define(['jquery'], function ($) {
         dataType: 'json',
         success: function (data) {
           console.log('[GE] lead v4:', data);
-          if (data && data.id) { callback(null, normalizeLead(data, id)); }
+          if (data && data.id) {
+            var nl = normalizeLead(data, id);
+            try {
+              console.log('[GE] campos do lead:', (nl.fields || []).map(function (f) {
+                return (f.field_name || f.name) + ' = ' + fieldValue(f);
+              }));
+            } catch (e) {}
+            callback(null, nl);
+          }
           else { fallback('Lead vazio'); }
         },
         error: function (xhr) {
           console.log('[GE] erro v4 status=', xhr.status, xhr.responseText);
           fallback('Erro v4 (' + xhr.status + ')');
+        }
+      });
+    }
+
+    // Busca o telefone real no CONTATO (no Kommo o telefone fica no contato,
+    // não no lead — o campo "Telefone continua o mesmo" do lead é só um dropdown).
+    function getContactPhone(contactId, callback) {
+      if (!contactId) { callback(''); return; }
+      $.ajax({
+        url: '/api/v4/contacts/' + contactId,
+        method: 'GET',
+        dataType: 'json',
+        success: function (c) {
+          var cf = (c && c.custom_fields_values) || [];
+          var phone = '';
+          // 1) telefone pelo field_code padrão do Kommo
+          for (var i = 0; i < cf.length; i++) {
+            if (String(cf[i].field_code || '').toUpperCase() === 'PHONE') {
+              phone = fieldValue(cf[i]);
+              if (phone) break;
+            }
+          }
+          // 2) fallback por nome
+          if (!phone) phone = extractField(cf, ['Telefone', 'Celular', 'Phone', 'Whatsapp', 'WhatsApp']);
+          console.log('[GE] telefone do contato', contactId, '=', phone);
+          callback(phone);
+        },
+        error: function (xhr) {
+          console.log('[GE] erro ao buscar contato', contactId, xhr.status);
+          callback('');
         }
       });
     }
@@ -155,54 +226,61 @@ define(['jquery'], function ($) {
         }
 
         var fields = lead.fields;
-        var payload = {
-          secret: settings.api_key,
-          kommoLeadId: lead.id,
-          kommoPipelineId: lead.pipeline_id,
-          kommoStageId: lead.status_id,
-          recipientName: lead.name || '',
-          recipientPhone: extractField(fields, 'Telefone'),
-          street: extractField(fields, 'Rua/Avenida'),
-          number: extractField(fields, 'Numero'),
-          neighborhood: extractField(fields, 'Bairro'),
-          postalCode: extractField(fields, 'CEP'),
-          city: extractField(fields, 'Cidade'),
-          complement: extractField(fields, 'Complemento'),
-          internalOrderNotes: extractField(fields, 'Anotacoes internas do pedido'),
-          kommoUrl: 'https://' + self.system().subdomain + '.kommo.com/leads/detail/' + lead.id,
-          deductStock: true
-        };
 
-        if (lead.contactId) {
-          payload.kommoContactId = lead.contactId;
-        }
+        // Telefone vem do contato; se não houver, tenta campo exato no lead.
+        getContactPhone(lead.contactId, function (contactPhone) {
+          var phone = contactPhone || extractField(fields, ['Telefone', 'Celular', 'Phone']);
 
-        setStatus('⏳ Gerando etiqueta...');
+          var payload = {
+            secret: settings.api_key,
+            kommoLeadId: lead.id,
+            kommoPipelineId: lead.pipeline_id,
+            kommoStageId: lead.status_id,
+            recipientName: lead.name || '',
+            recipientPhone: phone,
+            street: extractField(fields, ['Rua/Avenida', 'Endereco', 'Endereço', 'Logradouro', 'Rua']),
+            number: extractField(fields, ['Numero', 'Número', 'N°', 'Nº', 'Num']),
+            neighborhood: extractField(fields, ['Bairro']),
+            postalCode: extractField(fields, ['CEP', 'Cep']),
+            city: extractField(fields, ['Cidade', 'Municipio', 'Município']),
+            complement: extractField(fields, ['Complemento', 'Compl']),
+            internalOrderNotes: extractField(fields, ['Anotacoes internas do pedido', 'Anotações internas', 'Anotacoes internas', 'Regiao', 'Região']),
+            kommoUrl: 'https://' + self.system().subdomain + '.kommo.com/leads/detail/' + lead.id,
+            deductStock: true
+          };
 
-        $.ajax({
-          url: apiBase() + '/api/kommo/requests',
-          method: 'POST',
-          contentType: 'application/json',
-          data: JSON.stringify(payload),
-          success: function (data) {
-            if (data.status === 'etiqueta_gerada') {
-              setStatus(
-                '<span style="color:#4CAF50;font-weight:bold">✓ Etiqueta gerada!</span>' +
-                (data.stockDeducted ? '<br><small>📦 1 convite deduzido do estoque</small>' : '')
-              );
-            } else if (data.status === 'campos_incompletos') {
-              setStatus(
-                '<span style="color:#FF9800;font-weight:bold">⚠ Campos faltando</span><br>' +
-                '<small>' + (data.missingFields || []).join(', ') + '</small>'
-              );
-            }
-            refreshStock();
-          },
-          error: function (xhr) {
-            var msg = 'Erro ao gerar etiqueta';
-            try { msg = JSON.parse(xhr.responseText).message || msg; } catch (e) {}
-            setStatus('<span style="color:#f44336">✗ ' + msg + '</span>');
+          if (lead.contactId) {
+            payload.kommoContactId = lead.contactId;
           }
+
+          console.log('[GE] payload final:', payload);
+          setStatus('⏳ Gerando etiqueta...');
+
+          $.ajax({
+            url: apiBase() + '/api/kommo/requests',
+            method: 'POST',
+            contentType: 'application/json',
+            data: JSON.stringify(payload),
+            success: function (data) {
+              if (data.status === 'etiqueta_gerada') {
+                setStatus(
+                  '<span style="color:#4CAF50;font-weight:bold">✓ Etiqueta gerada!</span>' +
+                  (data.stockDeducted ? '<br><small>📦 1 convite deduzido do estoque</small>' : '')
+                );
+              } else if (data.status === 'campos_incompletos') {
+                setStatus(
+                  '<span style="color:#FF9800;font-weight:bold">⚠ Campos faltando</span><br>' +
+                  '<small>' + (data.missingFields || []).join(', ') + '</small>'
+                );
+              }
+              refreshStock();
+            },
+            error: function (xhr) {
+              var msg = 'Erro ao gerar etiqueta';
+              try { msg = JSON.parse(xhr.responseText).message || msg; } catch (e) {}
+              setStatus('<span style="color:#f44336">✗ ' + msg + '</span>');
+            }
+          });
         });
       });
     }
@@ -259,6 +337,120 @@ define(['jquery'], function ($) {
       });
     }
 
+    /* ── Definir Região ──────────────────────────────────────────────────── */
+
+    // Descobre o field_id do campo "Região" lendo a definição de custom fields
+    // do lead (funciona mesmo com o campo vazio no lead). Cacheado.
+    var _regiaoFieldId = null;
+    function getRegiaoFieldId(callback) {
+      if (_regiaoFieldId) { callback(_regiaoFieldId); return; }
+      $.ajax({
+        url: '/api/v4/leads/custom_fields?limit=250',
+        method: 'GET',
+        dataType: 'json',
+        success: function (data) {
+          var fields = (data && data._embedded && data._embedded.custom_fields) || [];
+          var alvo = norm('Região');
+          for (var i = 0; i < fields.length; i++) {
+            var fname = norm(fields[i].name);
+            if (fname === alvo || fname.indexOf(alvo) === 0) {
+              _regiaoFieldId = fields[i].id;
+              break;
+            }
+          }
+          console.log('[GE] field_id Região =', _regiaoFieldId);
+          callback(_regiaoFieldId);
+        },
+        error: function (xhr) {
+          console.log('[GE] erro ao listar custom_fields', xhr.status);
+          callback(null);
+        }
+      });
+    }
+
+    function doSetRegion() {
+      setStatus('⏳ Lendo endereço do lead...');
+
+      getLead(function (err, lead) {
+        if (err) {
+          setStatus('<span style="color:#f44336">✗ ' + err.message + '</span>');
+          return;
+        }
+
+        var fields = lead.fields;
+        var bairro = extractField(fields, ['Bairro']);
+        var cep = extractField(fields, ['CEP', 'Cep']);
+
+        setStatus('⏳ Resolvendo região...');
+
+        // 1. Backend resolve a região (bairro + CEP)
+        $.ajax({
+          url: apiBase() + '/api/region/resolve',
+          method: 'POST',
+          contentType: 'application/json',
+          data: JSON.stringify({ secret: cfg().api_key, bairro: bairro, cep: cep }),
+          success: function (res) {
+            if (!res || !res.regiao) {
+              setStatus(
+                '<span style="color:#FF9800;font-weight:bold">⚠ Região indefinida</span><br>' +
+                '<small>Bairro "' + (bairro || '—') + '" não reconhecido. Revise manualmente.</small>'
+              );
+              return;
+            }
+
+            // Confiança baixa: NÃO grava — apenas sugere e pede revisão do operador.
+            if (res.confidence === 'baixa') {
+              setStatus(
+                '<span style="color:#FF9800;font-weight:bold">⚠ Sugestão: ' + res.regiao + '</span><br>' +
+                '<small>Confiança baixa (bairro "' + (bairro || '—') + '" é de fronteira/incerto).<br>' +
+                'Não gravei — confira e defina manualmente se estiver correto.</small>'
+              );
+              return;
+            }
+
+            // 2. Descobre o field_id e grava no lead via sessão
+            getRegiaoFieldId(function (fieldId) {
+              if (!fieldId) {
+                setStatus('<span style="color:#f44336">✗ Campo "Região" não encontrado no Kommo</span>');
+                return;
+              }
+
+              setStatus('⏳ Gravando "' + res.regiao + '"...');
+
+              $.ajax({
+                url: '/api/v4/leads/' + lead.id,
+                method: 'PATCH',
+                contentType: 'application/json',
+                dataType: 'json',
+                data: JSON.stringify({
+                  custom_fields_values: [
+                    { field_id: fieldId, values: [{ value: res.regiao }] }
+                  ]
+                }),
+                success: function () {
+                  var aviso = res.confidence === 'media'
+                    ? '<br><small style="color:#999">via ' + res.method + '</small>'
+                    : '';
+                  setStatus(
+                    '<span style="color:#4CAF50;font-weight:bold">✓ Região: ' + res.regiao + '</span>' + aviso
+                  );
+                },
+                error: function (xhr) {
+                  console.log('[GE] erro PATCH lead', xhr.status, xhr.responseText);
+                  setStatus('<span style="color:#f44336">✗ Falha ao gravar região (' + xhr.status + ')</span>');
+                }
+              });
+            });
+          },
+          error: function (xhr) {
+            var msg = 'Erro ao resolver região';
+            try { msg = JSON.parse(xhr.responseText).error || msg; } catch (e) {}
+            setStatus('<span style="color:#f44336">✗ ' + msg + '</span>');
+          }
+        });
+      });
+    }
+
     /* ── Callbacks ───────────────────────────────────────────────────────── */
 
     this.callbacks = {
@@ -278,6 +470,7 @@ define(['jquery'], function ($) {
                 '<button id="ge-btn-single" style="flex:1;padding:8px 4px;background:#2196F3;color:#fff;border:none;border-radius:5px;font-size:11px;font-weight:700;cursor:pointer">📄 Gerar Etiqueta</button>' +
                 '<button id="ge-btn-batch" style="flex:1;padding:8px 4px;background:#FF9800;color:#fff;border:none;border-radius:5px;font-size:11px;font-weight:700;cursor:pointer">📦 Gerar Lote</button>' +
               '</div>' +
+              '<button id="ge-btn-region" style="width:100%;margin-top:6px;padding:8px 4px;background:#673AB7;color:#fff;border:none;border-radius:5px;font-size:11px;font-weight:700;cursor:pointer">📍 Definir Região</button>' +
               '<div id="ge-status" style="margin-top:6px;font-size:11px;min-height:14px;line-height:1.4"></div>' +
             '</div>'
         });
@@ -325,6 +518,13 @@ define(['jquery'], function ($) {
               '📦 Gerar Lote',
               'Gerar etiquetas para todos os leads elegíveis desta etapa e deduzir do estoque?',
               doGenerateBatch
+            );
+          })
+          .on('click.ge', '#ge-btn-region', function () {
+            showModal(
+              '📍 Definir Região',
+              'Resolver a região pelo bairro/CEP deste lead e gravar no campo "Região"?',
+              doSetRegion
             );
           })
           .on('click.ge', '#ge-modal-cancel', function () {
