@@ -66,7 +66,15 @@ Kommo.addPanel('lead_card', {
 
   async openModal(mode) {
     const statusEl = document.getElementById('kommo-status');
-    const modal    = document.getElementById('kommo-modal');
+
+    // Bloqueia se lead não pertence ao pipeline configurado
+    if (this.settings.pipeline_id &&
+        String(this.entity.pipeline_id) !== String(this.settings.pipeline_id)) {
+      statusEl.innerHTML = '<span style="color:#999">⚠ Etiquetas não disponíveis para este pipeline</span>';
+      return;
+    }
+
+    const modal = document.getElementById('kommo-modal');
     const titleEl  = document.getElementById('kommo-modal-title');
     const bodyEl   = document.getElementById('kommo-modal-body');
     const confirmBtn = document.getElementById('kommo-modal-confirm');

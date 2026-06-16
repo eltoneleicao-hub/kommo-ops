@@ -13,13 +13,19 @@
     "api_url": {
       "type": "text",
       "title": "URL da API",
-      "description": "URL base do seu sistema (ex: https://seu-tunnel.trycloudflare.com)",
+      "description": "URL base do sistema (ex: https://kommo-ops.vercel.app)",
       "required": true
     },
     "api_key": {
       "type": "password",
       "title": "API Key",
-      "description": "Chave de autenticação para o backend",
+      "description": "Chave de autenticação (KOMMO_WEBHOOK_SECRET)",
+      "required": true
+    },
+    "pipeline_id": {
+      "type": "text",
+      "title": "ID do Pipeline",
+      "description": "Apenas leads deste pipeline poderão gerar etiquetas (ex: 13930188)",
       "required": true
     }
   },
