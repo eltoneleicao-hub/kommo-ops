@@ -69,7 +69,7 @@ async function sendDirect(zplContent: string, labelId: string): Promise<void> {
     }
   } catch (error) {
     console.error(`[Printer] Erro ao enviar para ${printerName}:`, error);
-    throw new Error(`Failed to print to ${printerName}: ${error.message}`);
+    throw new Error(`Failed to print to ${printerName}: ${error instanceof Error ? error.message : String(error)}`);
   }
 }
 
@@ -94,7 +94,7 @@ async function sendViaFile(zplContent: string, labelId: string): Promise<void> {
     console.log(`[Printer] ZPL salvo em ${filename}`);
   } catch (error) {
     console.error(`[Printer] Erro ao salvar arquivo:`, error);
-    throw new Error(`Failed to save ZPL file: ${error.message}`);
+    throw new Error(`Failed to save ZPL file: ${error instanceof Error ? error.message : String(error)}`);
   }
 }
 
