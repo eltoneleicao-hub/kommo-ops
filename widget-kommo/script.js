@@ -20,6 +20,30 @@ define(['jquery'], function ($) {
       return (cfg().api_url || '').replace(/\/$/, '');
     }
 
+    // Pipelines sempre liberados (hardcode), somados ao setting do widget.
+    var EXTRA_PIPELINES = ['13533275', '13680395'];
+
+    // Lista de pipelines permitidos (setting pipeline_id, separado por vírgula).
+    // Vazio = todos os pipelines liberados.
+    function allowedPipelines() {
+      return String(cfg().pipeline_id || '')
+        .split(/[\s,;]+/)
+        .map(function (s) { return s.trim(); })
+        .filter(Boolean);
+    }
+
+    function pipelineAllowed(leadPipelineId) {
+      var id = String(leadPipelineId);
+      if (EXTRA_PIPELINES.indexOf(id) >= 0) return true; // sempre liberados
+      var list = allowedPipelines();
+      if (!list.length) return true;                     // setting vazio = todos
+      return list.indexOf(id) >= 0;
+    }
+
+    function pipelineBlocked() {
+      setStatus('<span style="color:#999">⚠ Etiquetas não disponíveis para este pipeline</span>');
+    }
+
     function currentLeadId() {
       try {
         if (APP.data && APP.data.current_card && APP.data.current_card.id) {
@@ -261,10 +285,7 @@ define(['jquery'], function ($) {
           return;
         }
 
-        if (settings.pipeline_id && lead.pipeline_id && lead.pipeline_id !== String(settings.pipeline_id)) {
-          setStatus('<span style="color:#999">⚠ Etiquetas não disponíveis para este pipeline</span>');
-          return;
-        }
+        if (!pipelineAllowed(lead.pipeline_id)) { pipelineBlocked(); return; }
 
         var fields = lead.fields;
 
@@ -342,10 +363,7 @@ define(['jquery'], function ($) {
           return;
         }
 
-        if (settings.pipeline_id && lead.pipeline_id && lead.pipeline_id !== String(settings.pipeline_id)) {
-          setStatus('<span style="color:#999">⚠ Etiquetas não disponíveis para este pipeline</span>');
-          return;
-        }
+        if (!pipelineAllowed(lead.pipeline_id)) { pipelineBlocked(); return; }
 
         $.ajax({
           url: apiBase() + '/api/kommo/requests-batch',
@@ -401,6 +419,7 @@ define(['jquery'], function ($) {
       setStatus('⏳ Contando leads da região ' + region + '...');
       getLead(function (err, lead) {
         if (err) { setStatus('<span style="color:#f44336">✗ ' + err.message + '</span>'); return; }
+        if (!pipelineAllowed(lead.pipeline_id)) { pipelineBlocked(); return; }
         $.ajax({
           url: apiBase() + '/api/kommo/requests-batch',
           method: 'POST',
@@ -435,6 +454,7 @@ define(['jquery'], function ($) {
       setStatus('⏳ Gerando lote da região ' + region + '...');
       getLead(function (err, lead) {
         if (err) { setStatus('<span style="color:#f44336">✗ ' + err.message + '</span>'); return; }
+        if (!pipelineAllowed(lead.pipeline_id)) { pipelineBlocked(); return; }
         $.ajax({
           url: apiBase() + '/api/kommo/requests-batch',
           method: 'POST',
@@ -499,6 +519,7 @@ define(['jquery'], function ($) {
           setStatus('<span style="color:#f44336">✗ ' + err.message + '</span>');
           return;
         }
+        if (!pipelineAllowed(lead.pipeline_id)) { pipelineBlocked(); return; }
 
         var fields = lead.fields;
         var bairro = extractField(fields, ['Bairro']);
