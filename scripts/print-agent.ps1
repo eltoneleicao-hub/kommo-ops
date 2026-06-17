@@ -115,7 +115,7 @@ public class RawPrinter {
 
 function Send-Zpl {
   param([string]$Zpl)
-  $bytes = [System.Text.Encoding]::ASCII.GetBytes($Zpl)
+  $bytes = [System.Text.Encoding]::UTF8.GetBytes($Zpl)  # UTF-8 p/ casar com ^CI28 (acentos)
   [RawPrinter]::SendBytes($PrinterName, $bytes)
 }
 
