@@ -36,7 +36,7 @@ export function renderLabelZPL(input: LabelInput): string {
   const internalOrderNotes = up(input.internalOrderNotes);
   const complement = up(input.complement);
 
-  const X = 60;          // margem esquerda (dots) — afasta da borda p/ não cortar
+  const X = 130;         // margem esquerda (dots) — afasta da borda p/ não cortar
   const LABEL_H = 406;   // altura útil da etiqueta (dots)
 
   // Monta as linhas (texto + altura + respiro) antes de posicionar, para
