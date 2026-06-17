@@ -113,10 +113,43 @@ public class RawPrinter {
 "@
 }
 
+function Test-PrinterReady {
+  $printer = Get-Printer -Name $PrinterName -ErrorAction SilentlyContinue
+  if (-not $printer) {
+    Write-Host "[AVISO] Impressora '$PrinterName' não encontrada." -ForegroundColor Yellow
+    return $false
+  }
+  # Jobs presos de rodadas anteriores (sintoma de driver corrompido)
+  $stuck = @(Get-PrintJob -PrinterName $PrinterName -ErrorAction SilentlyContinue |
+             Where-Object { $_.Size -eq 0 })
+  if ($stuck.Count -gt 0) {
+    Write-Host "[AVISO] $($stuck.Count) job(s) travado(s) na fila (Size=0). Limpando..." -ForegroundColor Yellow
+    $stuck | Remove-PrintJob -ErrorAction SilentlyContinue
+    Start-Sleep -Milliseconds 500
+    $still = @(Get-PrintJob -PrinterName $PrinterName -ErrorAction SilentlyContinue | Where-Object { $_.Size -eq 0 })
+    if ($still.Count -gt 0) {
+      Write-Host "[ERRO] Jobs ainda presos. Driver pode estar corrompido." -ForegroundColor Red
+      Write-Host "       Solução: reinicie o Spooler ou reinstale o driver ZDesigner." -ForegroundColor Red
+      Write-Host "       Stop-Service Spooler -Force; Remove-Item `"`$env:WINDIR\System32\spool\PRINTERS\*`" -Force; Start-Service Spooler" -ForegroundColor DarkGray
+      return $false
+    }
+    Write-Host "[OK] Fila limpa — continuando." -ForegroundColor Green
+  }
+  return $true
+}
+
 function Send-Zpl {
   param([string]$Zpl)
   $bytes = [System.Text.Encoding]::UTF8.GetBytes($Zpl)  # UTF-8 p/ casar com ^CI28 (acentos)
   [RawPrinter]::SendBytes($PrinterName, $bytes)
+  # Detecta driver corrompido: job fica preso com Size=0 mesmo após WritePrinter retornar OK
+  Start-Sleep -Milliseconds 1500
+  $stuck = @(Get-PrintJob -PrinterName $PrinterName -ErrorAction SilentlyContinue |
+             Where-Object { $_.Size -eq 0 })
+  if ($stuck.Count -gt 0) {
+    $stuck | Remove-PrintJob -ErrorAction SilentlyContinue
+    throw "Job ficou preso na fila (Printing,Retained,Size=0) — driver ZDesigner corrompido. Reinstale o driver e tente novamente."
+  }
 }
 
 # ── Chamadas HTTP ─────────────────────────────────────────────────────────────
@@ -204,6 +237,10 @@ function Invoke-Pass {
   $count = @($pending).Count
   if ($count -eq 0) { return }
   Write-Host "$([DateTime]::Now.ToString('HH:mm:ss')) — $count etiqueta(s) pendente(s)" -ForegroundColor White
+  if (-not (Test-PrinterReady)) {
+    Write-Host "[ABORTANDO] Impressora não está pronta. Corrija e rode novamente." -ForegroundColor Red
+    return
+  }
   foreach ($label in $pending) { Process-Label -Label $label }
 }
 
