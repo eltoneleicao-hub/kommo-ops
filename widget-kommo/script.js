@@ -385,17 +385,46 @@ define(['jquery'], function ($) {
       setStatus('<span style="color:#f44336">✗ ' + msg + '</span>');
     }
 
+    // Guarda os não-elegíveis da última seleção (p/ o botão "⬇️ CSV não elegíveis").
+    var _lastIneligible = [];
+    function exportIneligibleCsv() {
+      if (!_lastIneligible.length) return;
+      var sub = '';
+      try { sub = self.system().subdomain; } catch (e) {}
+      var header = ['Lead ID', 'Nome', 'Bairro', 'Região', 'Campos faltando', 'Link Kommo'];
+      var rows = _lastIneligible.map(function (l) {
+        var id = l.kommoLeadId || '';
+        var link = (sub && id) ? ('https://' + sub + '.kommo.com/leads/detail/' + id) : '';
+        return [id, l.recipientName || '', l.neighborhood || '', l.regiao || '',
+          (l.missingFields || []).join(', '), link];
+      });
+      downloadCsv('leads-nao-elegiveis.csv', header, rows);
+    }
+
+    // Botão de CSV dos não-elegíveis (só aparece quando há algum).
+    function ineligibleCsvButton(n) {
+      if (!n) return '';
+      return '<button id="ge-csv-ineligible" style="padding:3px 8px;background:#607D8B;color:#fff;' +
+        'border:none;border-radius:4px;font-size:11px;font-weight:700;cursor:pointer">' +
+        '⬇️ CSV não elegíveis (' + n + ')</button>';
+    }
+
     // Modal de SELEÇÃO de leads (checkboxes). Usado por Lote e Lote por Região.
     function showLeadSelection(title, leads, onConfirm) {
       var $modal = $('#ge-modal');
       $modal.find('#ge-modal-title').html(title);
 
       var eligibles = leads.filter(function (l) { return l.eligible; });
+      var ineligibles = leads.filter(function (l) { return !l.eligible; });
+      _lastIneligible = ineligibles;
+
       if (!eligibles.length) {
         $modal.find('#ge-modal-body').html(
-          '<div style="font-size:12px;color:#999">Nenhum lead elegível (todos com campos faltando).</div>'
+          '<div style="font-size:12px;color:#999;margin-bottom:8px">Nenhum lead elegível (todos com campos faltando).</div>' +
+          ineligibleCsvButton(ineligibles.length)
         );
         $modal.find('#ge-modal-confirm').hide();
+        $modal.find('#ge-csv-ineligible').off('click').on('click', exportIneligibleCsv);
         $modal.css('display', 'flex');
         return;
       }
@@ -415,8 +444,14 @@ define(['jquery'], function ($) {
       $modal.find('#ge-modal-body').html(
         '<label style="display:flex;gap:6px;align-items:center;font-size:12px;font-weight:700;margin-bottom:6px;cursor:pointer">' +
           '<input type="checkbox" id="ge-sel-all" checked> Selecionar todos (' + eligibles.length + ' elegíveis)</label>' +
+        (ineligibles.length
+          ? '<div style="margin-bottom:6px">' + ineligibleCsvButton(ineligibles.length) +
+            ' <small style="color:#999">' + ineligibles.length + ' sem etiqueta (campos faltando)</small></div>'
+          : '') +
         '<div style="max-height:240px;overflow:auto;border-top:1px solid #eee;padding-top:6px">' + rows + '</div>'
       );
+
+      $modal.find('#ge-csv-ineligible').off('click').on('click', exportIneligibleCsv);
 
       $modal.find('#ge-modal-confirm').show().off('click').on('click', function () {
         var ids = [];
