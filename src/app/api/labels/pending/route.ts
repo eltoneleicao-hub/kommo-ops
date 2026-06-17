@@ -12,7 +12,7 @@ export async function GET(request: NextRequest) {
     where: { printStatus: "pendente" },
     include: { MaterialRequest: true },
     orderBy: { createdAt: "asc" },
-    take: 10,
+    take: 50,
   });
 
   const result = labels.map((label) => ({
