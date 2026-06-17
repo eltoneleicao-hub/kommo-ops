@@ -20,6 +20,8 @@ export interface AddressFields {
   neighborhood: string;
   /** CEP sem máscara: "12233690" */
   postalCode: string;
+  /** Cidade quando vem embutida (ex.: "Bairro - Cidade"): "São José dos Campos" */
+  city: string;
   /** Complemento: "Apto 3" */
   complement: string;
 }
@@ -42,6 +44,7 @@ export interface OtherAddressFields {
   postalCode?: string | null;
   neighborhood?: string | null;
   complement?: string | null;
+  city?: string | null;
 }
 
 // ─── Regex helpers ────────────────────────────────────────────────────────────
@@ -203,6 +206,101 @@ function parseFreeform(raw: string): Partial<AddressFields> & { remainder: strin
   return { ...result, remainder: "" };
 }
 
+/**
+ * Estratégia 0 — bloco rotulado, possivelmente com Origem/Destino.
+ * Ex:
+ *   Origem:
+ *   Rua Java, 174 ...
+ *
+ *   Destino:
+ *   Rua: Ana Benedita de Miranda n° 75 - Casa
+ *   Bairro: Floresta - São Jose dos campos
+ *   Condomínio: Reserva Aruana
+ *   CEP: 12226 -357
+ *
+ * Regras: (1) se houver "Destino:", usa só o que vem depois; (2) lê os rótulos
+ * Rua/Bairro/CEP/Condomínio linha a linha; (3) normaliza CEP com espaço.
+ * Retorna null se o texto não parecer um bloco rotulado (deixa as outras
+ * estratégias assumirem).
+ */
+function parseLabeledBlock(
+  raw: string,
+): (Partial<AddressFields> & { city?: string }) | null {
+  // Só vale para blocos MULTILINHA (Origem/Destino, um rótulo por linha).
+  // Endereços de uma linha só continuam com as estratégias segmentada/freeform.
+  if (!/\r?\n/.test(raw)) return null;
+
+  let text = raw;
+
+  // (1) Se tem "Destino:", descarta tudo antes dele (ignora a Origem).
+  const destino = /destino\s*:?/i.exec(text);
+  if (destino) {
+    text = text.slice(destino.index + destino[0].length);
+  }
+
+  const lines = text.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+
+  // Só assume essa estratégia se houver rótulos reconhecíveis.
+  const labelRe = /^(rua|avenida|av|travessa|alameda|estrada|rodovia|pra[cç]a|bairro|cep|condom[ií]nio|complemento)\b/i;
+  if (!lines.some((l) => labelRe.test(l))) return null;
+
+  const result: Partial<AddressFields> & { city?: string } = {};
+  const complementParts: string[] = [];
+
+  const prefixMap: Record<string, string> = {
+    rua: "Rua", avenida: "Avenida", av: "Av.", travessa: "Travessa",
+    alameda: "Alameda", estrada: "Estrada", rodovia: "Rodovia", praca: "Praça",
+  };
+
+  for (const line of lines) {
+    // (3) CEP (tolera espaço: "12226 -357")
+    const cepM = /cep\s*:?\s*(\d{5}\s*-?\s*\d{3})/i.exec(line);
+    if (cepM && !result.postalCode) {
+      result.postalCode = normalizeCep(cepM[1].replace(/\s/g, ""));
+      continue;
+    }
+
+    // Bairro (pode trazer cidade após " - ")
+    const bairroM = /bairro\s*:?\s*(.+)/i.exec(line);
+    if (bairroM && !result.neighborhood) {
+      const parts = bairroM[1].split(/\s*[-–]\s*/);
+      result.neighborhood = parts[0].trim();
+      if (parts.length > 1) result.city = parts.slice(1).join(" - ").trim();
+      continue;
+    }
+
+    // Condomínio / Complemento → vão para complemento
+    const condoM = /(?:condom[ií]nio|complemento)\s*:?\s*(.+)/i.exec(line);
+    if (condoM) { complementParts.push(condoM[1].trim()); continue; }
+
+    // Logradouro: "Rua: Ana ... n° 75 - Casa"
+    const logM = /^(rua|avenida|av|travessa|alameda|estrada|rodovia|pra[cç]a)\.?\s*:?\s*(.+)/i.exec(line);
+    if (logM && !result.street) {
+      const tipo = logM[1].toLowerCase().replace("ç", "c");
+      let rest = logM[2].trim();
+
+      let numM = /(?:,\s*|[-–]\s*|n[º°]?\s*)(\d{1,6}[A-Za-z]?)\b/i.exec(rest);
+      if (!numM) numM = /\s(\d{1,6}[A-Za-z]?)\s*$/.exec(rest); // número no fim: "das Flores 100"
+      if (numM) {
+        result.number = numM[1];
+        const after = rest.slice(numM.index + numM[0].length).replace(/^[\s,\-–]+/, "").trim();
+        if (after) complementParts.push(after);
+        rest = rest.slice(0, numM.index).trim();
+      }
+
+      const prefix = prefixMap[tipo] || "";
+      result.street = (prefix ? prefix + " " : "") + rest.replace(/[,\-–\s]+$/, "").trim();
+      continue;
+    }
+  }
+
+  if (complementParts.length) result.complement = complementParts.join(" - ");
+
+  // Válido se extraiu pelo menos logradouro, CEP ou bairro.
+  if (!result.street && !result.postalCode && !result.neighborhood) return null;
+  return result;
+}
+
 // ─── Função principal ─────────────────────────────────────────────────────────
 
 /**
@@ -221,14 +319,16 @@ export function parseAddressField(
 
   // ── Etapa 1: extrair o que vier do campo street ──────────────────────────
 
-  let fromStreet: Partial<AddressFields> & { remainder: string };
+  let fromStreet: Partial<AddressFields> & { remainder?: string; city?: string };
 
-  // Heurística: se tem vírgula ou hífen rodeado de espaços → segmentado
-  const hasSegments = /[,;]|\s[-–]\s/.test(raw);
-  if (hasSegments) {
-    fromStreet = parseSegmented(raw);
+  // Etapa 0 (prioritária): bloco rotulado / Origem-Destino.
+  const labeled = parseLabeledBlock(raw);
+  if (labeled) {
+    fromStreet = labeled;
   } else {
-    fromStreet = parseFreeform(raw);
+    // Heurística: se tem vírgula ou hífen rodeado de espaços → segmentado
+    const hasSegments = /[,;]|\s[-–]\s/.test(raw);
+    fromStreet = hasSegments ? parseSegmented(raw) : parseFreeform(raw);
   }
 
   // ── Etapa 2: mesclar com campos externos (campos externos têm prioridade) ─
@@ -237,7 +337,8 @@ export function parseAddressField(
   const number      = clean(otherFields.number) || clean(fromStreet.number);
   const neighborhood = clean(otherFields.neighborhood) || clean(fromStreet.neighborhood);
   const postalCode  = normalizeCep(clean(otherFields.postalCode) || clean(fromStreet.postalCode ?? ""));
-  const complement  = clean(otherFields.complement) || clean(fromStreet.remainder);
+  const city        = clean(otherFields.city) || clean(fromStreet.city);
+  const complement  = clean(otherFields.complement) || clean(fromStreet.complement) || clean(fromStreet.remainder);
 
   // ── Etapa 3: detectar campos que não foram resolvidos ────────────────────
 
@@ -269,6 +370,7 @@ export function parseAddressField(
     number,
     neighborhood,
     postalCode,
+    city,
     complement,
     confidence,
     rawStreet: raw,

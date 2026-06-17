@@ -137,4 +137,47 @@ describe("parseAddressField", () => {
     const result = parseAddressField(raw, {});
     expect(result.rawStreet).toBe("Av. Brasil, 200, CEP 20000-000, Benfica");
   });
+
+  // ── 11. Bloco Origem/Destino rotulado (caso real) ─────────────────────────
+
+  it("usa o bloco Destino e ignora a Origem", () => {
+    const raw = [
+      "Origem:",
+      "Rua Java, 174",
+      "Ap 145",
+      "Jardim América",
+      "",
+      "",
+      "Destino:",
+      "Rua: Ana Benedita de Miranda n° 75 - Casa",
+      "Bairro: Floresta - São Jose dos campos",
+      "Condomínio: Reserva Aruana",
+      "CEP: 12226 -357",
+    ].join("\n");
+
+    const result = parseAddressField(raw, {});
+
+    expect(result.street).toBe("Rua Ana Benedita de Miranda");
+    expect(result.number).toBe("75");
+    expect(result.neighborhood).toBe("Floresta");
+    expect(result.city).toBe("São Jose dos campos");
+    expect(result.postalCode).toBe("12226357"); // CEP com espaço normalizado
+    expect(result.complement).toContain("Casa");
+    expect(result.complement).toContain("Reserva Aruana");
+  });
+
+  it("bloco rotulado sem 'Destino:' (rótulos diretos)", () => {
+    const raw = [
+      "Rua: das Flores 100",
+      "Bairro: Centro - Sao Jose dos Campos",
+      "CEP: 12200-000",
+    ].join("\n");
+
+    const result = parseAddressField(raw, {});
+
+    expect(result.number).toBe("100");
+    expect(result.neighborhood).toBe("Centro");
+    expect(result.city).toBe("Sao Jose dos Campos");
+    expect(result.postalCode).toBe("12200000");
+  });
 });

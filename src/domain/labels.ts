@@ -39,6 +39,7 @@ export function normalizeAddressInput(input: LabelInput): LabelInput {
       postalCode: input.postalCode,
       neighborhood: input.neighborhood,
       complement: input.complement,
+      city: input.city,
     });
 
     // Usa campos parseados se não estavam preenchidos
@@ -48,6 +49,7 @@ export function normalizeAddressInput(input: LabelInput): LabelInput {
       number: parsed.number || input.number,
       neighborhood: parsed.neighborhood || input.neighborhood,
       postalCode: parsed.postalCode || input.postalCode,
+      city: parsed.city || input.city,
       complement: parsed.complement || input.complement,
     };
   }
