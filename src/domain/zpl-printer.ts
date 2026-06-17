@@ -36,7 +36,24 @@ export function renderLabelZPL(input: LabelInput): string {
   const internalOrderNotes = up(input.internalOrderNotes);
   const complement = up(input.complement);
 
-  const X = 60; // margem esquerda (dots) — afasta da borda p/ não cortar na esquerda
+  const X = 60;          // margem esquerda (dots) — afasta da borda p/ não cortar
+  const LABEL_H = 406;   // altura útil da etiqueta (dots)
+
+  // Monta as linhas (texto + altura + respiro) antes de posicionar, para
+  // calcular a altura total e CENTRALIZAR o bloco verticalmente.
+  type Line = { text: string; h: number; gap: number };
+  const lines: Line[] = [];
+  lines.push({ text: recipientName, h: 40, gap: 12 });   // destinatário (destaque)
+  lines.push({ text: `${street}, ${number}`, h: 28, gap: 8 });
+  if (complement) lines.push({ text: complement, h: 26, gap: 8 });
+  lines.push({ text: neighborhood, h: 28, gap: 8 });
+  lines.push({ text: `${city} - ${postalCode}`, h: 28, gap: 8 });
+  lines.push({ text: `TEL: ${recipientPhone}`, h: 28, gap: 8 });
+  lines.push({ text: `REGIAO: ${internalOrderNotes}`, h: 22, gap: 0 }); // discreto
+
+  const totalH = lines.reduce((sum, l) => sum + l.h + l.gap, 0);
+  // Y inicial centraliza o bloco; nunca sobe acima de 12 dots.
+  let y = Math.max(12, Math.round((LABEL_H - totalH) / 2));
 
   const cmds: string[] = [
     "^XA",      // início
@@ -49,35 +66,10 @@ export function renderLabelZPL(input: LabelInput): string {
     "^LH0,0",   // home offset
   ];
 
-  // Cursor vertical: cada linha avança Y por (altura da fonte + respiro).
-  let y = 18;
-  const addLine = (text: string, height: number, width: number, gap = 8): void => {
-    cmds.push(`^FO${X},${y}`, `^A0N,${height},${width}`, `^FD${text}^FS`);
-    y += height + gap;
-  };
-
-  // 1. DESTINATÁRIO — maior, destaque
-  addLine(recipientName, 40, 40, 12);
-
-  // 2. RUA + NÚMERO
-  addLine(`${street}, ${number}`, 28, 28);
-
-  // 3. COMPLEMENTO (se houver)
-  if (complement) {
-    addLine(complement, 26, 26);
+  for (const line of lines) {
+    cmds.push(`^FO${X},${y}`, `^A0N,${line.h},${line.h}`, `^FD${line.text}^FS`);
+    y += line.h + line.gap;
   }
-
-  // 4. BAIRRO
-  addLine(neighborhood, 28, 28);
-
-  // 5. CIDADE - CEP
-  addLine(`${city} - ${postalCode}`, 28, 28);
-
-  // 6. TELEFONE
-  addLine(`TEL: ${recipientPhone}`, 28, 28);
-
-  // 7. REGIÃO — discreto (menor que o corpo)
-  addLine(`REGIAO: ${internalOrderNotes}`, 22, 22);
 
   cmds.push(
     "^PQ1,0,1,Y", // 1 cópia
