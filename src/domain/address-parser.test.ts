@@ -166,6 +166,15 @@ describe("parseAddressField", () => {
     expect(result.complement).toContain("Reserva Aruana");
   });
 
+  it("aceita variações de número no bloco (n., nº)", () => {
+    const comPonto = parseAddressField(["Rua: das Acacias n. 42 - Fundos", "CEP: 12200-000"].join("\n"), {});
+    expect(comPonto.number).toBe("42");
+    expect(comPonto.complement).toContain("Fundos");
+
+    const comOrdinal = parseAddressField(["Rua: Sete de Setembro nº 9", "Bairro: Centro"].join("\n"), {});
+    expect(comOrdinal.number).toBe("9");
+  });
+
   it("bloco rotulado sem 'Destino:' (rótulos diretos)", () => {
     const raw = [
       "Rua: das Flores 100",

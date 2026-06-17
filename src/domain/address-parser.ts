@@ -279,7 +279,7 @@ function parseLabeledBlock(
       const tipo = logM[1].toLowerCase().replace("ç", "c");
       let rest = logM[2].trim();
 
-      let numM = /(?:,\s*|[-–]\s*|n[º°]?\s*)(\d{1,6}[A-Za-z]?)\b/i.exec(rest);
+      let numM = /(?:,\s*|[-–]\s*|n[º°ª]?\.?\s*)(\d{1,6}[A-Za-z]?)\b/i.exec(rest); // n° / nº / n. / n
       if (!numM) numM = /\s(\d{1,6}[A-Za-z]?)\s*$/.exec(rest); // número no fim: "das Flores 100"
       if (numM) {
         result.number = numM[1];
