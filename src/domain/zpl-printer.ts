@@ -12,6 +12,49 @@ function clean(value: string | null | undefined): string {
 }
 
 /**
+ * Quebra um nome longo em até `maxLines` linhas de ~`maxChars` caracteres
+ * (quebrando por palavra), para não cortar na borda direita da etiqueta.
+ * Nome curto volta em 1 linha. Se ainda estourar `maxLines`, trunca a última
+ * com "..." (ASCII — a fonte da Zebra pode não ter o glifo "…").
+ */
+export function wrapName(text: string, maxChars: number, maxLines: number): string[] {
+  const t = clean(text);
+  if (t.length <= maxChars) return [t];
+
+  const words = t.split(/\s+/).filter(Boolean);
+  const lines: string[] = [];
+  let cur = "";
+  const flush = () => {
+    if (cur) {
+      lines.push(cur);
+      cur = "";
+    }
+  };
+
+  for (const w of words) {
+    if (lines.length >= maxLines) break;
+    const cand = cur ? `${cur} ${w}` : w;
+    if (cand.length <= maxChars) {
+      cur = cand;
+    } else {
+      flush();
+      cur = w.length <= maxChars ? w : w.slice(0, maxChars); // palavra única gigante: corta
+    }
+  }
+  flush();
+
+  const result = lines.slice(0, maxLines);
+  // Sobrou conteúdo além das linhas permitidas → reticência na última.
+  if (result.length && result.join(" ").length < t.length) {
+    const i = result.length - 1;
+    const cut = Math.max(0, maxChars - 3);
+    const base = result[i].length > cut ? result[i].slice(0, cut).trimEnd() : result[i];
+    result[i] = `${base}...`;
+  }
+  return result;
+}
+
+/**
  * Gera comando ZPL para imprimir etiqueta de entrega.
  *
  * Layout:
@@ -43,7 +86,12 @@ export function renderLabelZPL(input: LabelInput): string {
   // calcular a altura total e CENTRALIZAR o bloco verticalmente.
   type Line = { text: string; h: number; gap: number };
   const lines: Line[] = [];
-  lines.push({ text: recipientName, h: 40, gap: 12 });   // destinatário (destaque)
+  // Destinatário (destaque) — quebra em até 2 linhas se for longo, p/ não cortar.
+  const nameLines = wrapName(recipientName, 26, 2);
+  nameLines.forEach((ln, i) => {
+    const isLast = i === nameLines.length - 1;
+    lines.push({ text: ln, h: 40, gap: isLast ? 12 : 4 }); // linhas do nome coladas (gap 4)
+  });
   lines.push({ text: `${street}, ${number}`, h: 28, gap: 8 });
   if (complement) lines.push({ text: complement, h: 26, gap: 8 });
   lines.push({ text: neighborhood, h: 28, gap: 8 });
