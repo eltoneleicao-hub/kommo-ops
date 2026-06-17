@@ -148,6 +148,28 @@ describe("resolveRegion — núcleo do nome (prefixo genérico omitido)", () => 
   });
 });
 
+describe("resolveRegion — typo, dica de zona e bairro embutido", () => {
+  it('"Palmeiras Soa jose" (typo São) → Sul', () => {
+    expect(resolveRegion("Palmeiras Soa jose").regiao).toBe("Sul");
+  });
+  it('dica "...Zona Norte" → Norte', () => {
+    const r = resolveRegion("Condomínio Radici- Igreja da Cidade Zona Norte, deixar portaria");
+    expect(r.regiao).toBe("Norte");
+  });
+  it('bairro embutido "...Jardim das Industrias" → Oeste', () => {
+    expect(resolveRegion("Condomínio esplendor blue- Jardim das Industrias").regiao).toBe("Oeste");
+  });
+  it('bairro embutido "Empresa: Bosque dos Eucaliptos /Casa Jardim Imperial" → Sul', () => {
+    expect(resolveRegion("Empresa: Bosque dos Eucaliptos /Casa Jardim Imperial").regiao).toBe("Sul");
+  });
+  it('embutido conservador: "Rua Santa Rita 10" → null (não chuta)', () => {
+    expect(resolveRegion("Rua Santa Rita 10").regiao).toBeNull();
+  });
+  it('"Residencial Terras do vale" (Caçapava) → null (não confunde c/ Terras do Sul)', () => {
+    expect(resolveRegion("Residencial Terras do vale").regiao).toBeNull();
+  });
+});
+
 describe("resolveRegion — SEGURANÇA: ambíguos/reprovados NÃO podem ser chutados", () => {
   // Núcleos com homônimo enganoso no índice (verificação reprovou) ou ambíguos
   // entre 2 regiões: têm que ficar null, NUNCA resolver p/ uma região.

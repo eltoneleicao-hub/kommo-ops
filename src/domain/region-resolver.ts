@@ -65,6 +65,7 @@ const ABBREV: Record<string, string> = {
   pres: "presidente",
   sta: "santa", sto: "santo",
   pe: "padre", dr: "doutor", eng: "engenheiro",
+  soa: "sao", // typo recorrente de "São" ("Palmeiras Soa jose")
 };
 
 function expandAbbrev(norm: string): string {
@@ -445,6 +446,59 @@ function regiaoPorNucleo(norm: string): Regiao | null {
   return CORE_INDEX.get(core) ?? null;
 }
 
+/* ── Dica textual de zona ("...Zona Norte", "região sul") ─────────────────────
+ * Operador às vezes anota a zona no campo de bairro. Sinal explícito e forte.
+ */
+const REGIAO_POR_PALAVRA: Record<string, Regiao> = {
+  centro: "Centro", norte: "Norte", sul: "Sul",
+  leste: "Leste", oeste: "Oeste", sudeste: "Sudeste",
+};
+function regiaoPorTextoHint(norm: string): Regiao | null {
+  const m = norm.match(/\b(?:zona|regiao)\s+(centro|norte|sul|leste|oeste|sudeste)\b/);
+  return m ? REGIAO_POR_PALAVRA[m[1]] : null;
+}
+
+/* ── Bairro EMBUTIDO numa string maior ────────────────────────────────────────
+ * Ex.: "Empresa: Bosque dos Eucaliptos /Casa Jardim Imperial" → contém o bairro.
+ * Conservador: só usa chaves de bairro com ≥2 palavras e ≥12 chars (evita casar
+ * tokens genéricos como "santa rita"); casa por SUBSEQUÊNCIA de tokens (não
+ * pedaço de palavra); e só resolve se todas as chaves achadas concordam.
+ */
+const CONTENT_KEYS: Array<[string[], Regiao]> = (() => {
+  const out: Array<[string[], Regiao]> = [];
+  const push = (key: string, regiao: Regiao) => {
+    const toks = key.split(" ").filter(Boolean);
+    if (toks.length >= 2 && key.length >= 12 && !CORE_BLOCK.has(coreKey(key))) {
+      out.push([toks, regiao]);
+    }
+  };
+  for (const [k, r] of BAIRRO_INDEX) push(k, r);
+  for (const [k, r] of ALIAS_INDEX) push(k, r);
+  return out;
+})();
+
+function hasSubseq(hay: string[], needle: string[]): boolean {
+  if (needle.length > hay.length) return false;
+  for (let i = 0; i + needle.length <= hay.length; i++) {
+    let ok = true;
+    for (let j = 0; j < needle.length; j++) {
+      if (hay[i + j] !== needle[j]) { ok = false; break; }
+    }
+    if (ok) return true;
+  }
+  return false;
+}
+
+function regiaoPorConteudo(norm: string): Regiao | null {
+  const toks = norm.split(" ").filter(Boolean);
+  if (toks.length < 2) return null;
+  const regioes = new Set<Regiao>();
+  for (const [keyToks, regiao] of CONTENT_KEYS) {
+    if (hasSubseq(toks, keyToks)) regioes.add(regiao);
+  }
+  return regioes.size === 1 ? [...regioes][0] : null;
+}
+
 function cep5(cep: string | null | undefined): string {
   const digits = String(cep ?? "").replace(/\D/g, "");
   return digits.length >= 5 ? digits.slice(0, 5) : "";
@@ -498,11 +552,27 @@ export function resolveRegion(
     }
   }
 
+  // 1.46 Dica textual de zona escrita no campo ("...Zona Norte").
+  if (norm) {
+    const porHint = regiaoPorTextoHint(norm);
+    if (porHint) {
+      return { regiao: porHint, confidence: "media", method: "alias", matchedBairro: norm };
+    }
+  }
+
   // 1.5 Casamento aproximado (typo/abreviação não mapeada): ex. "Barrinho".
   if (norm) {
     const aprox = fuzzyRegion(norm);
     if (aprox) {
       return { regiao: aprox, confidence: "media", method: "fuzzy", matchedBairro: norm };
+    }
+  }
+
+  // 1.7 Bairro embutido numa string maior (empresa/condomínio + bairro).
+  if (norm) {
+    const porConteudo = regiaoPorConteudo(norm);
+    if (porConteudo) {
+      return { regiao: porConteudo, confidence: "media", method: "alias", matchedBairro: norm };
     }
   }
 
