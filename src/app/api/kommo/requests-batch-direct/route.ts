@@ -20,6 +20,7 @@ import { prisma } from "@/lib/prisma";
 import { renderLabelText, validateLabelInput } from "@/domain/labels";
 import { getRequestStatusForMissingFields } from "@/domain/requests";
 import { resolveRegion } from "@/domain/region-resolver";
+import { fixMojibake } from "@/domain/encoding";
 import { withCors, corsPreflight } from "@/lib/cors";
 
 export async function OPTIONS(request: NextRequest) {
@@ -52,6 +53,19 @@ const payloadSchema = z.object({
 
 type LeadPayload = z.infer<typeof leadSchema>;
 
+// Conserta mojibake (acentos corrompidos por import CSV/Windows no Kommo) em
+// todos os campos de texto, ANTES de validar/resolver região/gravar. Mantém os
+// não-texto (IDs, URL) intactos.
+const sanitizeLead = (l: LeadPayload): LeadPayload => ({
+  ...l,
+  recipientName: fixMojibake(l.recipientName),
+  street: fixMojibake(l.street),
+  neighborhood: fixMojibake(l.neighborhood),
+  city: fixMojibake(l.city),
+  complement: fixMojibake(l.complement),
+  internalOrderNotes: fixMojibake(l.internalOrderNotes),
+});
+
 const labelInputOf = (l: LeadPayload) => ({
   recipientName: l.recipientName,
   recipientPhone: l.recipientPhone,
@@ -75,7 +89,8 @@ export async function POST(request: NextRequest) {
     return withCors(NextResponse.json({ error: "unauthorized" }, { status: 401 }), origin);
   }
 
-  const { deductStock, validateOnly, leads } = parsed.data;
+  const { deductStock, validateOnly } = parsed.data;
+  const leads = parsed.data.leads.map(sanitizeLead);
 
   // Modo validação: só devolve elegibilidade (não grava nada).
   if (validateOnly) {

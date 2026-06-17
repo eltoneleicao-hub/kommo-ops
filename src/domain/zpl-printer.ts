@@ -6,9 +6,10 @@
  */
 
 import type { LabelInput } from "./labels";
+import { fixMojibake } from "./encoding";
 
 function clean(value: string | null | undefined): string {
-  return String(value ?? "").trim();
+  return fixMojibake(value).trim(); // conserta acentos corrompidos (mojibake) na origem
 }
 
 /**
