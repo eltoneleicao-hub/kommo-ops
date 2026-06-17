@@ -242,10 +242,11 @@ define(['jquery'], function ($) {
       return '';
     }
 
-    // Busca o telefone real no CONTATO (no Kommo o telefone fica no contato,
-    // não no lead). Prioriza o "Tel. comercial".
-    function getContactPhone(contactId, callback) {
-      if (!contactId) { callback(''); return; }
+    // Busca dados do CONTATO (no Kommo o telefone e o nome do destinatário ficam
+    // no contato, não no lead). Telefone prioriza "Tel. comercial".
+    // Retorna { name, phone }.
+    function getContact(contactId, callback) {
+      if (!contactId) { callback({ name: '', phone: '' }); return; }
       $.ajax({
         url: '/api/v4/contacts/' + contactId,
         method: 'GET',
@@ -263,12 +264,13 @@ define(['jquery'], function ($) {
           }
           // 2) fallback por nome de campo custom
           if (!phone) phone = extractField(cf, ['Tel. comercial', 'Telefone comercial', 'Telefone', 'Celular', 'Phone']);
-          console.log('[GE] telefone (comercial) =', phone);
-          callback(phone);
+          var name = (c && c.name) ? String(c.name) : '';
+          console.log('[GE] contato nome=', name, 'tel=', phone);
+          callback({ name: name, phone: phone });
         },
         error: function (xhr) {
           console.log('[GE] erro ao buscar contato', contactId, xhr.status);
-          callback('');
+          callback({ name: '', phone: '' });
         }
       });
     }
@@ -289,16 +291,17 @@ define(['jquery'], function ($) {
 
         var fields = lead.fields;
 
-        // Telefone vem do contato; se não houver, tenta campo exato no lead.
-        getContactPhone(lead.contactId, function (contactPhone) {
-          var phone = contactPhone || extractField(fields, ['Telefone', 'Celular', 'Phone']);
+        // Nome e telefone vêm do contato; se não houver, cai para o lead/campos.
+        getContact(lead.contactId, function (contact) {
+          var phone = contact.phone || extractField(fields, ['Telefone', 'Celular', 'Phone']);
+          var name = contact.name || lead.name || '';
 
           var payload = {
             secret: settings.api_key,
             kommoLeadId: lead.id,
             kommoPipelineId: lead.pipeline_id,
             kommoStageId: lead.status_id,
-            recipientName: lead.name || '',
+            recipientName: name,
             recipientPhone: phone,
             street: extractField(fields, ['Rua/Avenida', 'Endereco', 'Endereço', 'Logradouro', 'Rua']),
             number: extractField(fields, ['Numero', 'Número', 'N°', 'Nº', 'Num']),
