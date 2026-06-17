@@ -411,10 +411,14 @@ const STRIP_PREFIX = new Set([
 ]);
 
 const CORE_BLOCK = new Set([
-  // reprovados pela verificação (índice tem homônimo, bairro real é ambíguo/fora)
-  "floresta", "sao pedro", "planalto", "iracema",
-  // genéricos / colisão com cidade ou nome comum
-  "sao paulo", "santos", "maria", "industrial", "imperial", "paulista",
+  // Colisão com nome de CIDADE/capital (não é bairro de SJC, apesar do homônimo
+  // no índice): "São Paulo"/"Santos" são capitais; "Paulista"/"Maria" genéricos.
+  "sao paulo", "santos", "maria", "paulista",
+  // Núcleos presentes em 2 regiões na lista oficial (all-agree já barra; mantido
+  // por clareza): Imperial (Sul+Oeste), Industrial (Leste+Sul).
+  "imperial", "industrial",
+  // OBS: "floresta", "sao pedro", "planalto", "iracema" foram LIBERADOS —
+  // a lista oficial (PDF) tem correspondência única, então confiamos nela.
 ]);
 
 function coreKey(norm: string): string {

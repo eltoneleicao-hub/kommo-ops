@@ -170,13 +170,27 @@ describe("resolveRegion — typo, dica de zona e bairro embutido", () => {
   });
 });
 
-describe("resolveRegion — SEGURANÇA: ambíguos/reprovados NÃO podem ser chutados", () => {
-  // Núcleos com homônimo enganoso no índice (verificação reprovou) ou ambíguos
-  // entre 2 regiões: têm que ficar null, NUNCA resolver p/ uma região.
-  ["Floresta", "Jardim São Pedro", "Parque Planalto", "Jardim Iracema",
-   "Parque Imperial", "São Paulo", "Industrial",
-   "Nova Esperança"].forEach((b) => {
-    it(`"${b}" → null (ambíguo/reprovado)`, () => {
+describe("resolveRegion — correspondência pela lista oficial (PDF)", () => {
+  // Bairro escrito ≠ entrada exata, mas com correspondência ÚNICA na lista
+  // oficial → confiamos na lista (decisão do usuário: PDF é a fonte oficial).
+  const casos: Array<[string, string]> = [
+    ["Floresta", "Leste"],          // Condomínio Floresta
+    ["Loteamento Floresta", "Leste"],
+    ["Jardim São Pedro", "Centro"], // Vila São Pedro
+    ["Parque Planalto", "Leste"],   // Conj. Res. Planalto
+    ["Jardim Iracema", "Sudeste"],  // Vila Iracema
+  ];
+  casos.forEach(([entrada, regiao]) => {
+    it(`"${entrada}" → ${regiao}`, () => {
+      expect(resolveRegion(entrada).regiao).toBe(regiao);
+    });
+  });
+});
+
+describe("resolveRegion — SEGURANÇA: colisão cidade/2-regiões fica null", () => {
+  // Capitais homônimas e núcleos em 2 regiões na lista oficial: NUNCA chutar.
+  ["Parque Imperial", "São Paulo", "Industrial", "Nova Esperança"].forEach((b) => {
+    it(`"${b}" → null (ambíguo/colisão)`, () => {
       expect(resolveRegion(b).regiao).toBeNull();
     });
   });
