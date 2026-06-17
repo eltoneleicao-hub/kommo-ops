@@ -22,6 +22,7 @@ import { z } from "zod";
 import { prisma } from "@/lib/prisma";
 import { renderLabelZPL, validateZPL, previewZPLOnline } from "@/domain/zpl-printer";
 import { normalizeAddressInput } from "@/domain/labels";
+import { fixMojibake } from "@/domain/encoding";
 import { sendToZebraPrinter } from "@/lib/printer-adapter";
 
 const printPayloadSchema = z.object({
@@ -89,6 +90,11 @@ export async function POST(request: NextRequest) {
         labelId,
         zplContent,
         preview: previewZPLOnline(zplContent),
+        _debug: {
+          marker: "MOJIBAKE_FIX_v1",
+          rawCity: label.MaterialRequest.city,
+          fixedCity: fixMojibake(label.MaterialRequest.city),
+        },
       });
     }
 
