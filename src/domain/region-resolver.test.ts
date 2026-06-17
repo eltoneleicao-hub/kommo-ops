@@ -68,3 +68,38 @@ describe("resolveRegion — bairro vazio / desconhecido", () => {
     expect(resolveRegion(null).regiao).toBeNull();
   });
 });
+
+describe("resolveRegion — abreviações expandidas", () => {
+  it("Jd. Satélite → Sul", () => {
+    expect(resolveRegion("Jd. Satélite").regiao).toBe("Sul");
+  });
+
+  it("Vl. Maria → Centro", () => {
+    expect(resolveRegion("Vl. Maria").regiao).toBe("Centro");
+  });
+
+  it("Res. Gazzo → Sul", () => {
+    expect(resolveRegion("Res. Gazzo").regiao).toBe("Sul");
+  });
+
+  it("Conj Hab Sao Geraldo (abreviado, sem acento) → Norte", () => {
+    expect(resolveRegion("Conj Hab Sao Geraldo").regiao).toBe("Norte");
+  });
+});
+
+describe("resolveRegion — fuzzy (erros de digitação)", () => {
+  it("Barrinho → Bairrinho → Leste (media, fuzzy)", () => {
+    const r = resolveRegion("Barrinho");
+    expect(r.regiao).toBe("Leste");
+    expect(r.method).toBe("fuzzy");
+    expect(r.confidence).toBe("media");
+  });
+
+  it("Jardim Satelitte (typo) → Sul", () => {
+    expect(resolveRegion("Jardim Satelitte").regiao).toBe("Sul");
+  });
+
+  it("palavra bem diferente não casa por fuzzy → indefinida", () => {
+    expect(resolveRegion("Tinga").regiao).toBeNull();
+  });
+});

@@ -28,8 +28,8 @@ export interface RegionResult {
   /** Região resolvida, ou null se não foi possível determinar. */
   regiao: Regiao | null;
   confidence: RegionConfidence;
-  /** Como foi resolvido: "bairro" | "cep" | "ambiguo-cep" | "indefinida". */
-  method: "bairro" | "cep" | "ambiguo-cep" | "indefinida";
+  /** Como foi resolvido. "fuzzy" = casou por aproximação (typo/abreviação). */
+  method: "bairro" | "fuzzy" | "cep" | "ambiguo-cep" | "indefinida";
   /** Texto do bairro normalizado usado na busca (debug). */
   matchedBairro?: string;
 }
@@ -45,6 +45,78 @@ export function normalizeBairro(value: string | null | undefined): string {
     .replace(/[.,;:/\\]/g, " ")
     .replace(/\s+/g, " ")
     .trim();
+}
+
+/* ── Expansão de abreviações comuns dos formulários (Jd. → Jardim etc.) ───────
+ * Aplicada ao índice E à entrada, para casar abreviado ↔ por extenso.
+ */
+const ABBREV: Record<string, string> = {
+  jd: "jardim", jrd: "jardim", jdm: "jardim", jardin: "jardim",
+  vl: "vila",
+  pq: "parque",
+  res: "residencial", resid: "residencial",
+  cj: "conjunto", conj: "conjunto",
+  hab: "habitacional",
+  cond: "condominio",
+  chac: "chacara",
+  faz: "fazenda", fzd: "fazenda",
+  pres: "presidente",
+  sta: "santa", sto: "santo",
+  pe: "padre", dr: "doutor", eng: "engenheiro",
+};
+
+function expandAbbrev(norm: string): string {
+  if (!norm) return norm;
+  return norm
+    .split(" ")
+    .map((t) => ABBREV[t] ?? t)
+    .join(" ");
+}
+
+/** Chave canônica de bairro: normaliza + expande abreviações. */
+function bairroKey(value: string | null | undefined): string {
+  return expandAbbrev(normalizeBairro(value));
+}
+
+/** Distância de edição (Levenshtein) entre duas strings. */
+function levenshtein(a: string, b: string): number {
+  const m = a.length;
+  const n = b.length;
+  if (m === 0) return n;
+  if (n === 0) return m;
+  let prev = Array.from({ length: n + 1 }, (_, j) => j);
+  for (let i = 1; i <= m; i++) {
+    const cur = [i];
+    for (let j = 1; j <= n; j++) {
+      const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+      cur[j] = Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + cost);
+    }
+    prev = cur;
+  }
+  return prev[n];
+}
+
+/**
+ * Casamento aproximado p/ tolerar erros de digitação (ex.: "Barrinho" →
+ * "Bairrinho"). Só aceita quando o erro é pequeno E o melhor casamento aponta
+ * para UMA única região (evita rotear errado um typo ambíguo entre regiões).
+ */
+function fuzzyRegion(norm: string): Regiao | null {
+  if (norm.length < 5) return null;
+  let best = Infinity;
+  let regioes = new Set<Regiao>();
+  for (const [key, regiao] of BAIRRO_INDEX) {
+    if (Math.abs(key.length - norm.length) > 3) continue; // poda óbvia
+    const d = levenshtein(norm, key);
+    if (d < best) {
+      best = d;
+      regioes = new Set([regiao]);
+    } else if (d === best) {
+      regioes.add(regiao);
+    }
+  }
+  const limit = norm.length >= 8 ? 2 : 1;
+  return best <= limit && regioes.size === 1 ? [...regioes][0] : null;
 }
 
 /* ── Dados: bairros por região (forma legível; normalizados em runtime) ──────
@@ -175,7 +247,7 @@ const BAIRROS_AMBIGUOS = new Set(
   [
     "Jardim Ismênia", "Royal Park", "Res. Sunset Park", "Jardim Altos do Esplanada",
     "Vila Nair", "Vila Nova Conceição",
-  ].map(normalizeBairro)
+  ].map(bairroKey)
 );
 
 /* ── Faixa de CEP → região (PARCIAL, baseada em amostragem de CEP verificada) ─
@@ -213,7 +285,7 @@ const BAIRRO_INDEX: Map<string, Regiao> = (() => {
   const idx = new Map<string, Regiao>();
   (Object.keys(BAIRROS_POR_REGIAO) as Regiao[]).forEach((regiao) => {
     for (const bairro of BAIRROS_POR_REGIAO[regiao]) {
-      idx.set(normalizeBairro(bairro), regiao);
+      idx.set(bairroKey(bairro), regiao);
     }
   });
   return idx;
@@ -239,9 +311,9 @@ export function resolveRegion(
   bairro: string | null | undefined,
   cep?: string | null
 ): RegionResult {
-  const norm = normalizeBairro(bairro);
+  const norm = bairroKey(bairro);
 
-  // 1. Bairro reconhecido
+  // 1. Bairro reconhecido (match exato após normalizar + expandir abreviações)
   if (norm && BAIRRO_INDEX.has(norm)) {
     const regiao = BAIRRO_INDEX.get(norm)!;
     const ambiguo = BAIRROS_AMBIGUOS.has(norm);
@@ -256,6 +328,14 @@ export function resolveRegion(
     }
 
     return { regiao, confidence: "alta", method: "bairro", matchedBairro: norm };
+  }
+
+  // 1.5 Casamento aproximado (typo/abreviação não mapeada): ex. "Barrinho".
+  if (norm) {
+    const aprox = fuzzyRegion(norm);
+    if (aprox) {
+      return { regiao: aprox, confidence: "media", method: "fuzzy", matchedBairro: norm };
+    }
   }
 
   // 2. Bairro vazio/desconhecido → CEP
