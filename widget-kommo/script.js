@@ -475,11 +475,11 @@ define(['jquery'], function ($) {
 
     /* ── Definir Região ──────────────────────────────────────────────────── */
 
-    // Descobre o field_id do campo "Região" lendo a definição de custom fields
-    // do lead (funciona mesmo com o campo vazio no lead). Cacheado.
-    var _regiaoFieldId = null;
-    function getRegiaoFieldId(callback) {
-      if (_regiaoFieldId) { callback(_regiaoFieldId); return; }
+    // Descobre o campo "Região" (id, tipo e opções) lendo os custom fields do
+    // lead — funciona mesmo com o campo vazio. Cacheado.
+    var _regiaoField = null;
+    function getRegiaoField(callback) {
+      if (_regiaoField) { callback(_regiaoField); return; }
       $.ajax({
         url: '/api/v4/leads/custom_fields?limit=250',
         method: 'GET',
@@ -487,21 +487,39 @@ define(['jquery'], function ($) {
         success: function (data) {
           var fields = (data && data._embedded && data._embedded.custom_fields) || [];
           var alvo = norm('Região');
+          var found = null;
           for (var i = 0; i < fields.length; i++) {
             var fname = norm(fields[i].name);
-            if (fname === alvo || fname.indexOf(alvo) === 0) {
-              _regiaoFieldId = fields[i].id;
-              break;
-            }
+            if (fname === alvo || fname.indexOf(alvo) === 0) { found = fields[i]; break; }
           }
-          console.log('[GE] field_id Região =', _regiaoFieldId);
-          callback(_regiaoFieldId);
+          _regiaoField = found;
+          try {
+            console.log('[GE] campo Região:', found ? { id: found.id, type: found.type, enums: found.enums } : null);
+          } catch (e) {}
+          callback(found);
         },
         error: function (xhr) {
           console.log('[GE] erro ao listar custom_fields', xhr.status);
           callback(null);
         }
       });
+    }
+
+    // Monta o values[] do PATCH conforme o tipo do campo (select usa enum_id).
+    function buildRegionValues(field, regiao) {
+      var type = String(field.type || 'text').toLowerCase();
+      if (type === 'select' || type === 'multiselect' || type === 'radiobutton') {
+        var enums = field.enums || [];
+        var want = norm(regiao);
+        for (var i = 0; i < enums.length; i++) {
+          var ev = norm(enums[i].value);
+          if (ev === want || ev.indexOf(want) >= 0 || want.indexOf(ev) >= 0) {
+            return [{ enum_id: enums[i].id }];
+          }
+        }
+        return null; // nenhuma opção do dropdown corresponde à região
+      }
+      return [{ value: regiao }]; // texto/textarea
     }
 
     function doSetRegion() {
@@ -545,10 +563,19 @@ define(['jquery'], function ($) {
               return;
             }
 
-            // 2. Descobre o field_id e grava no lead via sessão
-            getRegiaoFieldId(function (fieldId) {
-              if (!fieldId) {
+            // 2. Descobre o campo (tipo + opções) e grava no lead via sessão
+            getRegiaoField(function (field) {
+              if (!field) {
                 setStatus('<span style="color:#f44336">✗ Campo "Região" não encontrado no Kommo</span>');
+                return;
+              }
+
+              var values = buildRegionValues(field, res.regiao);
+              if (!values) {
+                setStatus(
+                  '<span style="color:#FF9800;font-weight:bold">⚠ Sem opção para "' + res.regiao + '"</span><br>' +
+                  '<small>O campo "Região" é uma lista e não tem a opção "' + res.regiao + '". Crie essa opção no Kommo.</small>'
+                );
                 return;
               }
 
@@ -560,9 +587,7 @@ define(['jquery'], function ($) {
                 contentType: 'application/json',
                 dataType: 'json',
                 data: JSON.stringify({
-                  custom_fields_values: [
-                    { field_id: fieldId, values: [{ value: res.regiao }] }
-                  ]
+                  custom_fields_values: [{ field_id: field.id, values: values }]
                 }),
                 success: function () {
                   var aviso = res.confidence === 'media'
@@ -574,7 +599,12 @@ define(['jquery'], function ($) {
                 },
                 error: function (xhr) {
                   console.log('[GE] erro PATCH lead', xhr.status, xhr.responseText);
-                  setStatus('<span style="color:#f44336">✗ Falha ao gravar região (' + xhr.status + ')</span>');
+                  var detail = '';
+                  try {
+                    var d = JSON.parse(xhr.responseText);
+                    detail = d['validation-errors'] ? ' — ' + JSON.stringify(d['validation-errors']) : (d.title ? ' — ' + d.title : '');
+                  } catch (e) {}
+                  setStatus('<span style="color:#f44336">✗ Falha ao gravar região (' + xhr.status + ')' + detail + '</span>');
                 }
               });
             });
