@@ -6,10 +6,12 @@
  */
 
 import type { LabelInput } from "./labels";
-import { fixMojibake } from "./encoding";
+import { toAsciiText } from "./encoding";
 
 function clean(value: string | null | undefined): string {
-  return fixMojibake(value).trim(); // conserta acentos corrompidos (mojibake) na origem
+  // Repara mojibake E translitera p/ ASCII (SAO JOSE) — robusto contra qualquer
+  // encoding (fonte da Zebra, ^CI28, agente). Etiqueta de entrega não precisa de acento.
+  return toAsciiText(value).trim();
 }
 
 /**
