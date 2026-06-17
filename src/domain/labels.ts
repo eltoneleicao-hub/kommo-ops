@@ -14,7 +14,7 @@ export type LabelInput = {
 
 const requiredFields: Array<[keyof LabelInput, string]> = [
   ["recipientName", "nome do destinatario"],
-  ["recipientPhone", "telefone"],
+  // telefone NÃO é mais obrigatório nem impresso (decisão 2026-06-17)
   ["street", "Rua/Avenida"],
   ["number", "Numero"],
   ["neighborhood", "Bairro"],
@@ -84,8 +84,6 @@ export function renderLabelText(input: LabelInput): string {
   lines.push(
     clean(normalized.neighborhood),
     `${clean(normalized.city)} - CEP ${clean(normalized.postalCode)}`,
-    "",
-    `Telefone: ${clean(normalized.recipientPhone)}`,
     "",
     `REGIAO: ${clean(normalized.internalOrderNotes)}`,
   );

@@ -78,7 +78,6 @@ export function renderLabelZPL(input: LabelInput): string {
   const neighborhood = up(input.neighborhood);
   const city = up(input.city);
   const postalCode = up(input.postalCode);
-  const recipientPhone = clean(input.recipientPhone); // só dígitos — sem caixa
   const internalOrderNotes = up(input.internalOrderNotes);
   const complement = up(input.complement);
 
@@ -108,7 +107,6 @@ export function renderLabelZPL(input: LabelInput): string {
   if (complement) pushField(complement, 26, 8);
   pushField(neighborhood, 28, 8);
   pushField(`${city} - ${postalCode}`, 28, 8);
-  pushField(`TEL: ${recipientPhone}`, 28, 8, 1); // telefone: 1 linha (não quebra)
   pushField(`REGIAO: ${internalOrderNotes}`, 22, 0);
 
   const totalH = lines.reduce((sum, l) => sum + l.h + l.gap, 0);

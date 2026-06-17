@@ -18,14 +18,13 @@ describe("label domain", () => {
     expect(validateLabelInput(completeInput)).toEqual([]);
   });
 
-  it("returns missing fields in Portuguese labels", () => {
+  it("telefone vazio NÃO é mais campo faltando; demais vêm em pt-BR", () => {
     expect(validateLabelInput({ ...completeInput, street: "", recipientPhone: "" })).toEqual([
-      "telefone",
       "Rua/Avenida",
     ]);
   });
 
-  it("renders label without sender and without empty complement", () => {
+  it("renders label sem telefone e sem complemento vazio", () => {
     expect(renderLabelText(completeInput)).toBe(
       [
         "MARIA SILVA",
@@ -33,8 +32,6 @@ describe("label domain", () => {
         "Rua Manoel Fiel Filho, 204",
         "Bosque dos eucaliptos",
         "Sao Jose dos Campos - CEP 12233690",
-        "",
-        "Telefone: 12999990000",
         "",
         "REGIAO: REGIAO LESTE",
       ].join("\n"),
