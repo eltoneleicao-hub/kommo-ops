@@ -3,7 +3,7 @@ import { z } from "zod";
 import { prisma } from "@/lib/prisma";
 import { renderLabelText, validateLabelInput } from "@/domain/labels";
 import { getRequestStatusForMissingFields } from "@/domain/requests";
-import { resolveRegion } from "@/domain/region-resolver";
+import { resolveRegion, normalizeBairro } from "@/domain/region-resolver";
 
 const batchPayloadSchema = z.object({
   secret: z.string().min(1),
@@ -36,9 +36,16 @@ export async function POST(request: NextRequest) {
     orderBy: { createdAt: "asc" },
   });
 
-  // Filtra por região (resolvida do bairro/CEP) quando informada.
+  // Filtra por região quando informada. Considera tanto a região ANOTADA no
+  // lead (campo Região / anotações — o que sai na etiqueta) quanto a RESOLVIDA
+  // do endereço (bairro/CEP), o que for mais abrangente.
+  const wantRegion = normalizeBairro(region ?? "");
   const materialRequests = region
-    ? allRequests.filter((r) => resolveRegion(r.neighborhood, r.postalCode).regiao === region)
+    ? allRequests.filter(
+        (r) =>
+          (wantRegion.length > 0 && normalizeBairro(r.internalOrderNotes).includes(wantRegion)) ||
+          resolveRegion(r.neighborhood, r.postalCode).regiao === region,
+      )
     : allRequests;
 
   // Modo contagem: apenas informa quantos leads são elegíveis
