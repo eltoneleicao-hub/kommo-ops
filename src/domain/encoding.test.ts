@@ -14,6 +14,14 @@ describe("fixMojibake", () => {
     expect(fixMojibake("Ã‚ngela")).toBe("Ângela");
   });
 
+  it("conserta nome real Lindóia (ó corrompido)", () => {
+    // "Lindóia" → ó (UTF-8 C3 B3) lido como CP1252 → "LindÃ³ia"
+    expect(fixMojibake("LindÃ³ia")).toBe("Lindóia");
+    // todos os acentos PT-BR, não só É: á à â ã ó ô õ ú ü ç
+    expect(fixMojibake("LuÃ­s GonÃ§alves")).toBe("Luís Gonçalves");
+    expect(fixMojibake("AntÃ´nio SimÃµes")).toBe("Antônio Simões");
+  });
+
   it("NÃO altera texto já correto (acentos válidos)", () => {
     expect(fixMojibake("SÃO JOSÉ DOS CAMPOS")).toBe("SÃO JOSÉ DOS CAMPOS");
     expect(fixMojibake("João da Conceição")).toBe("João da Conceição");
