@@ -4,6 +4,7 @@ import { prisma } from "@/lib/prisma";
 import { renderLabelText, validateLabelInput } from "@/domain/labels";
 import { getRequestStatusForMissingFields } from "@/domain/requests";
 import { resolveRegion, normalizeBairro } from "@/domain/region-resolver";
+import { withCors } from "@/lib/cors";
 
 const batchPayloadSchema = z.object({
   secret: z.string().min(1),
@@ -67,21 +68,26 @@ export async function POST(request: NextRequest) {
 
   // Modo lista: devolve os candidatos para seleção no widget (não gera nada).
   if (list) {
-    return NextResponse.json({
-      total: materialRequests.length,
-      leads: materialRequests.map((r) => {
-        const missing = missingOf(r);
-        return {
-          kommoLeadId: r.kommoLeadId,
-          recipientName: r.recipientName ?? "",
-          neighborhood: r.neighborhood ?? "",
-          city: r.city ?? "",
-          regiao: resolveRegion(r.neighborhood, r.postalCode).regiao,
-          eligible: missing.length === 0,
-          missingFields: missing,
-        };
+    return withCors(
+      NextResponse.json({
+        total: materialRequests.length,
+        leads: materialRequests.map((r) => {
+          const missing = missingOf(r);
+          const resolved = resolveRegion(r.neighborhood, r.postalCode);
+          return {
+            kommoLeadId: r.kommoLeadId,
+            recipientName: r.recipientName ?? "",
+            neighborhood: r.neighborhood ?? "",
+            city: r.city ?? "",
+            regiao: resolved.regiao,
+            confidence: resolved.confidence,
+            eligible: missing.length === 0,
+            missingFields: missing,
+          };
+        }),
       }),
-    });
+      request.headers.get("origin"),
+    );
   }
 
   // Seleção: gera apenas os leads escolhidos (se a lista foi enviada).

@@ -580,6 +580,10 @@ define(['jquery'], function ($) {
               }
 
               setStatus('⏳ Gravando "' + res.regiao + '"...');
+              try {
+                console.log('[GE] PATCH Região → field', field.id, 'type', field.type,
+                  'values', JSON.stringify(values));
+              } catch (e) {}
 
               $.ajax({
                 url: '/api/v4/leads/' + lead.id,
@@ -590,12 +594,49 @@ define(['jquery'], function ($) {
                   custom_fields_values: [{ field_id: field.id, values: values }]
                 }),
                 success: function () {
-                  var aviso = res.confidence === 'media'
-                    ? '<br><small style="color:#999">via ' + res.method + '</small>'
-                    : '';
-                  setStatus(
-                    '<span style="color:#4CAF50;font-weight:bold">✓ Região: ' + res.regiao + '</span>' + aviso
-                  );
+                  // Kommo pode responder 200 sem aplicar o campo (tipo divergente,
+                  // opção inexistente no dropdown ou campo trocado). Relê o lead e
+                  // confirma o valor antes de mostrar "✓".
+                  $.ajax({
+                    url: '/api/v4/leads/' + lead.id,
+                    method: 'GET',
+                    dataType: 'json',
+                    success: function (fresh) {
+                      var saved = extractField(
+                        normalizeLead(fresh, lead.id).fields, ['Região', 'Regiao']);
+                      var ok = norm(saved) === norm(res.regiao);
+                      try {
+                        console.log('[GE] read-back Região =', JSON.stringify(saved),
+                          '| esperado', res.regiao, '| ok', ok);
+                      } catch (e) {}
+                      if (!ok) {
+                        setStatus(
+                          '<span style="color:#FF9800;font-weight:bold">⚠ Kommo aceitou mas não gravou</span><br>' +
+                          '<small>Esperado "' + res.regiao + '", campo lê "' + (saved || '—') + '".<br>' +
+                          'Veja o console [GE] (tipo/opções do campo Região).</small>'
+                        );
+                        return;
+                      }
+                      var aviso = res.confidence === 'media'
+                        ? '<br><small style="color:#999">via ' + res.method + '</small>'
+                        : '';
+                      setStatus(
+                        '<span style="color:#4CAF50;font-weight:bold">✓ Região: ' + res.regiao + '</span>' + aviso +
+                        '<br><small style="color:#999">Reabra/atualize o card se o campo não mudar.</small>'
+                      );
+                      // best-effort: recarrega o card aberto sem F5 manual
+                      try {
+                        var card = APP.data && APP.data.current_card;
+                        if (card && typeof card.fetch === 'function') card.fetch();
+                      } catch (e) {}
+                    },
+                    error: function () {
+                      setStatus(
+                        '<span style="color:#4CAF50;font-weight:bold">✓ Região: ' + res.regiao + '</span>' +
+                        '<br><small style="color:#999">(não consegui reler p/ confirmar — atualize o card)</small>'
+                      );
+                    }
+                  });
                 },
                 error: function (xhr) {
                   console.log('[GE] erro PATCH lead', xhr.status, xhr.responseText);
@@ -614,6 +655,126 @@ define(['jquery'], function ($) {
             try { msg = JSON.parse(xhr.responseText).error || msg; } catch (e) {}
             setStatus('<span style="color:#f44336">✗ ' + msg + '</span>');
           }
+        });
+      });
+    }
+
+    /* ── Definir Região em LOTE ──────────────────────────────────────────── */
+
+    // Monta o resumo final do lote (gravados, falhas e a lista de pendências
+    // que o operador precisa resolver na mão).
+    function renderRegionBatchSummary(ok, fail, manual) {
+      var html = '<span style="color:#4CAF50;font-weight:bold">✓ ' + ok +
+        ' região(ões) gravada(s)</span>';
+      if (fail) {
+        html += '<br><span style="color:#f44336">✗ ' + fail + ' falha(s) ao gravar</span>';
+      }
+      if (manual.length) {
+        var items = manual.map(function (m) {
+          return '<li style="margin:2px 0">' + m.name +
+            ' <small style="color:#999">(' + m.motivo + ')</small></li>';
+        }).join('');
+        html += '<br><span style="color:#FF9800;font-weight:bold">⚠ ' + manual.length +
+          ' p/ revisar manual:</span>' +
+          '<ul style="margin:4px 0 0 16px;padding:0;max-height:140px;overflow:auto">' +
+          items + '</ul>';
+        try { console.log('[GE] região em lote — pendências manuais:', manual); } catch (e) {}
+      } else {
+        html += '<br><small style="color:#999">Nenhum lead pendente 🎉</small>';
+      }
+      setStatus(html);
+    }
+
+    // Resolve + grava a região de todos os leads da etapa atual. Bairros sem
+    // região, de baixa confiança (divisa) ou sem opção no dropdown ficam de fora
+    // e entram na lista de revisão manual.
+    function doSetRegionBatch() {
+      setStatus('⏳ Buscando leads da etapa...');
+
+      getLead(function (err, lead) {
+        if (err) { setStatus('<span style="color:#f44336">✗ ' + err.message + '</span>'); return; }
+        if (!pipelineAllowed(lead.pipeline_id)) { pipelineBlocked(); return; }
+
+        // 1. Lista os leads da etapa (backend já resolve região + confiança).
+        $.ajax({
+          url: apiBase() + '/api/kommo/requests-batch',
+          method: 'POST',
+          contentType: 'application/json',
+          data: JSON.stringify({
+            secret: cfg().api_key,
+            kommoPipelineId: String(lead.pipeline_id),
+            kommoStageId: String(lead.status_id),
+            list: true
+          }),
+          success: function (data) {
+            var leads = (data && data.leads) || [];
+            if (!leads.length) {
+              setStatus('<span style="color:#999">Nenhum lead nesta etapa</span>');
+              return;
+            }
+
+            // 2. Descobre o campo Região (tipo + opções) uma vez só.
+            getRegiaoField(function (field) {
+              if (!field) {
+                setStatus('<span style="color:#f44336">✗ Campo "Região" não encontrado no Kommo</span>');
+                return;
+              }
+
+              // 3. Particiona: graváveis x manuais.
+              var toWrite = [];
+              var manual = [];
+              leads.forEach(function (l) {
+                var nome = l.recipientName || ('Lead ' + l.kommoLeadId);
+                if (!l.kommoLeadId) {
+                  manual.push({ id: '', name: nome, motivo: 'sem ID Kommo' });
+                } else if (!l.regiao) {
+                  manual.push({ id: l.kommoLeadId, name: nome,
+                    motivo: 'sem região — bairro "' + (l.neighborhood || '—') + '"' });
+                } else if (l.confidence === 'baixa') {
+                  manual.push({ id: l.kommoLeadId, name: nome,
+                    motivo: 'divisa/incerto → sugestão ' + l.regiao });
+                } else {
+                  var values = buildRegionValues(field, l.regiao);
+                  if (!values) {
+                    manual.push({ id: l.kommoLeadId, name: nome,
+                      motivo: 'sem opção "' + l.regiao + '" no dropdown' });
+                  } else {
+                    toWrite.push({ id: l.kommoLeadId, regiao: l.regiao, values: values });
+                  }
+                }
+              });
+
+              if (!toWrite.length) {
+                renderRegionBatchSummary(0, 0, manual);
+                return;
+              }
+
+              // 4. Grava sequencialmente (evita estourar o rate limit do Kommo).
+              var ok = 0, fail = 0, i = 0, total = toWrite.length;
+              (function next() {
+                if (i >= total) { renderRegionBatchSummary(ok, fail, manual); return; }
+                var item = toWrite[i++];
+                setStatus('⏳ Gravando região ' + i + '/' + total + ' (' + item.regiao + ')...');
+                $.ajax({
+                  url: '/api/v4/leads/' + item.id,
+                  method: 'PATCH',
+                  contentType: 'application/json',
+                  dataType: 'json',
+                  data: JSON.stringify({
+                    custom_fields_values: [{ field_id: field.id, values: item.values }]
+                  }),
+                  success: function () { ok++; next(); },
+                  error: function (xhr) {
+                    fail++;
+                    manual.push({ id: item.id, name: 'Lead ' + item.id,
+                      motivo: 'falha ao gravar (HTTP ' + xhr.status + ')' });
+                    next();
+                  }
+                });
+              })();
+            });
+          },
+          error: function (xhr) { batchError(xhr, 'Erro ao buscar leads'); }
         });
       });
     }
@@ -638,6 +799,7 @@ define(['jquery'], function ($) {
                 '<button id="ge-btn-batch" style="flex:1;padding:8px 4px;background:#FF9800;color:#fff;border:none;border-radius:5px;font-size:11px;font-weight:700;cursor:pointer">📦 Gerar Lote</button>' +
               '</div>' +
               '<button id="ge-btn-region" style="width:100%;margin-top:6px;padding:8px 4px;background:#673AB7;color:#fff;border:none;border-radius:5px;font-size:11px;font-weight:700;cursor:pointer">📍 Definir Região</button>' +
+              '<button id="ge-btn-setregion-batch" style="width:100%;margin-top:6px;padding:8px 4px;background:#3F51B5;color:#fff;border:none;border-radius:5px;font-size:11px;font-weight:700;cursor:pointer">🧭 Definir Região (Lote)</button>' +
               '<button id="ge-btn-region-batch" style="width:100%;margin-top:6px;padding:8px 4px;background:#009688;color:#fff;border:none;border-radius:5px;font-size:11px;font-weight:700;cursor:pointer">🗺️ Lote por Região</button>' +
               '<div id="ge-status" style="margin-top:6px;font-size:11px;min-height:14px;line-height:1.4"></div>' +
             '</div>'
@@ -689,6 +851,15 @@ define(['jquery'], function ($) {
               '📍 Definir Região',
               'Resolver a região pelo bairro/CEP deste lead e gravar no campo "Região"?',
               doSetRegion
+            );
+          })
+          .on('click.ge', '#ge-btn-setregion-batch', function () {
+            showModal(
+              '🧭 Definir Região em Lote',
+              'Resolver e gravar a região de <b>todos os leads desta etapa</b> do funil?<br><br>' +
+              '<small>Bairros sem região ou de divisa (baixa confiança) não são gravados — ' +
+              'aparecem no fim para você revisar manualmente.</small>',
+              doSetRegionBatch
             );
           })
           .on('click.ge', '#ge-btn-region-batch', function () {
