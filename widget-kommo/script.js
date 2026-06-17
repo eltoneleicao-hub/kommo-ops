@@ -309,7 +309,7 @@ define(['jquery'], function ($) {
             postalCode: extractField(fields, ['CEP', 'Cep']),
             city: extractField(fields, ['Cidade', 'Municipio', 'Município']),
             complement: extractField(fields, ['Complemento', 'Compl']),
-            internalOrderNotes: extractField(fields, ['Anotacoes internas do pedido', 'Anotações internas', 'Anotacoes internas', 'Regiao', 'Região']),
+            internalOrderNotes: extractField(fields, ['Região', 'Regiao']),
             kommoUrl: 'https://' + self.system().subdomain + '.kommo.com/leads/detail/' + lead.id,
             deductStock: true
           };
@@ -685,96 +685,139 @@ define(['jquery'], function ($) {
       setStatus(html);
     }
 
-    // Resolve + grava a região de todos os leads da etapa atual. Bairros sem
-    // região, de baixa confiança (divisa) ou sem opção no dropdown ficam de fora
-    // e entram na lista de revisão manual.
+    // Busca TODOS os leads de uma etapa direto do Kommo (paginado, via sessão).
+    // NÃO depende do banco local (que só guarda leads já etiquetados).
+    function fetchAllLeadsInStage(pipelineId, statusId, onDone, onError) {
+      var all = [];
+      function page(p) {
+        var url = '/api/v4/leads'
+          + '?filter[statuses][0][pipeline_id]=' + encodeURIComponent(pipelineId)
+          + '&filter[statuses][0][status_id]=' + encodeURIComponent(statusId)
+          + '&limit=250&page=' + p;
+        $.ajax({
+          url: url,
+          method: 'GET',
+          dataType: 'json',
+          success: function (data) {
+            var leads = (data && data._embedded && data._embedded.leads) || [];
+            all = all.concat(leads);
+            setStatus('⏳ Lendo leads do Kommo... (' + all.length + ')');
+            var hasNext = !!(data && data._links && data._links.next);
+            if (hasNext && leads.length) { page(p + 1); }
+            else { onDone(all); }
+          },
+          error: function (xhr) { onError(xhr); }
+        });
+      }
+      page(1);
+    }
+
+    // Resolve + grava a região de todos os leads da ETAPA ATUAL, lidos direto do
+    // Kommo (não só os já etiquetados). Bairros sem região, de baixa confiança
+    // (divisa) ou sem opção no dropdown ficam de fora p/ revisão manual.
     function doSetRegionBatch() {
-      setStatus('⏳ Buscando leads da etapa...');
+      setStatus('⏳ Lendo leads da etapa no Kommo...');
 
       getLead(function (err, lead) {
         if (err) { setStatus('<span style="color:#f44336">✗ ' + err.message + '</span>'); return; }
         if (!pipelineAllowed(lead.pipeline_id)) { pipelineBlocked(); return; }
 
-        // 1. Lista os leads da etapa (backend já resolve região + confiança).
-        $.ajax({
-          url: apiBase() + '/api/kommo/requests-batch',
-          method: 'POST',
-          contentType: 'application/json',
-          data: JSON.stringify({
-            secret: cfg().api_key,
-            kommoPipelineId: String(lead.pipeline_id),
-            kommoStageId: String(lead.status_id),
-            list: true
-          }),
-          success: function (data) {
-            var leads = (data && data.leads) || [];
-            if (!leads.length) {
-              setStatus('<span style="color:#999">Nenhum lead nesta etapa</span>');
+        // 1. Busca TODOS os leads da etapa direto do Kommo (paginado).
+        fetchAllLeadsInStage(lead.pipeline_id, lead.status_id, function (kommoLeads) {
+          if (!kommoLeads.length) {
+            setStatus('<span style="color:#999">Nenhum lead nesta etapa</span>');
+            return;
+          }
+
+          // 2. Descobre o campo Região (tipo + opções) uma vez só.
+          getRegiaoField(function (field) {
+            if (!field) {
+              setStatus('<span style="color:#f44336">✗ Campo "Região" não encontrado no Kommo</span>');
               return;
             }
 
-            // 2. Descobre o campo Região (tipo + opções) uma vez só.
-            getRegiaoField(function (field) {
-              if (!field) {
-                setStatus('<span style="color:#f44336">✗ Campo "Região" não encontrado no Kommo</span>');
-                return;
-              }
+            // 3. Extrai bairro/CEP de cada lead p/ resolver no backend em 1 chamada.
+            var meta = {};
+            var items = kommoLeads.map(function (l) {
+              var fields = l.custom_fields_values || [];
+              var info = {
+                id: String(l.id),
+                name: l.name || ('Lead ' + l.id),
+                bairro: extractField(fields, ['Bairro']),
+                cep: extractField(fields, ['CEP', 'Cep'])
+              };
+              meta[info.id] = info;
+              return { id: info.id, bairro: info.bairro, cep: info.cep };
+            });
 
-              // 3. Particiona: graváveis x manuais.
-              var toWrite = [];
-              var manual = [];
-              leads.forEach(function (l) {
-                var nome = l.recipientName || ('Lead ' + l.kommoLeadId);
-                if (!l.kommoLeadId) {
-                  manual.push({ id: '', name: nome, motivo: 'sem ID Kommo' });
-                } else if (!l.regiao) {
-                  manual.push({ id: l.kommoLeadId, name: nome,
-                    motivo: 'sem região — bairro "' + (l.neighborhood || '—') + '"' });
-                } else if (l.confidence === 'baixa') {
-                  manual.push({ id: l.kommoLeadId, name: nome,
-                    motivo: 'divisa/incerto → sugestão ' + l.regiao });
-                } else {
-                  var values = buildRegionValues(field, l.regiao);
-                  if (!values) {
-                    manual.push({ id: l.kommoLeadId, name: nome,
-                      motivo: 'sem opção "' + l.regiao + '" no dropdown' });
+            setStatus('⏳ Resolvendo ' + items.length + ' região(ões)...');
+            $.ajax({
+              url: apiBase() + '/api/region/resolve-batch',
+              method: 'POST',
+              contentType: 'application/json',
+              data: JSON.stringify({ secret: cfg().api_key, items: items }),
+              success: function (resp) {
+                var results = (resp && resp.results) || [];
+
+                // 4. Particiona: graváveis x manuais.
+                var toWrite = [];
+                var manual = [];
+                results.forEach(function (r) {
+                  var info = meta[String(r.id)] || { name: 'Lead ' + r.id, bairro: '' };
+                  if (!r.regiao) {
+                    manual.push({ id: r.id, name: info.name,
+                      motivo: 'sem região — bairro "' + (info.bairro || '—') + '"' });
+                  } else if (r.confidence === 'baixa') {
+                    manual.push({ id: r.id, name: info.name,
+                      motivo: 'divisa/incerto → sugestão ' + r.regiao });
                   } else {
-                    toWrite.push({ id: l.kommoLeadId, regiao: l.regiao, values: values });
-                  }
-                }
-              });
-
-              if (!toWrite.length) {
-                renderRegionBatchSummary(0, 0, manual);
-                return;
-              }
-
-              // 4. Grava sequencialmente (evita estourar o rate limit do Kommo).
-              var ok = 0, fail = 0, i = 0, total = toWrite.length;
-              (function next() {
-                if (i >= total) { renderRegionBatchSummary(ok, fail, manual); return; }
-                var item = toWrite[i++];
-                setStatus('⏳ Gravando região ' + i + '/' + total + ' (' + item.regiao + ')...');
-                $.ajax({
-                  url: '/api/v4/leads/' + item.id,
-                  method: 'PATCH',
-                  contentType: 'application/json',
-                  dataType: 'json',
-                  data: JSON.stringify({
-                    custom_fields_values: [{ field_id: field.id, values: item.values }]
-                  }),
-                  success: function () { ok++; next(); },
-                  error: function (xhr) {
-                    fail++;
-                    manual.push({ id: item.id, name: 'Lead ' + item.id,
-                      motivo: 'falha ao gravar (HTTP ' + xhr.status + ')' });
-                    next();
+                    var values = buildRegionValues(field, r.regiao);
+                    if (!values) {
+                      manual.push({ id: r.id, name: info.name,
+                        motivo: 'sem opção "' + r.regiao + '" no dropdown' });
+                    } else {
+                      toWrite.push({ id: Number(r.id) || r.id,
+                        custom_fields_values: [{ field_id: field.id, values: values }] });
+                    }
                   }
                 });
-              })();
+
+                if (!toWrite.length) {
+                  renderRegionBatchSummary(0, 0, manual);
+                  return;
+                }
+
+                // 5. Grava em LOTE: PATCH /api/v4/leads com array (<=50/req), em
+                //    chunks sequenciais (respeita o rate limit do Kommo).
+                var CHUNK = 50, ok = 0, fail = 0, idx = 0, total = toWrite.length;
+                (function nextChunk() {
+                  if (idx >= total) { renderRegionBatchSummary(ok, fail, manual); return; }
+                  var chunk = toWrite.slice(idx, idx + CHUNK);
+                  idx += chunk.length;
+                  setStatus('⏳ Gravando ' + Math.min(idx, total) + '/' + total + '...');
+                  $.ajax({
+                    url: '/api/v4/leads',
+                    method: 'PATCH',
+                    contentType: 'application/json',
+                    dataType: 'json',
+                    data: JSON.stringify(chunk),
+                    success: function () { ok += chunk.length; nextChunk(); },
+                    error: function (xhr) {
+                      fail += chunk.length;
+                      chunk.forEach(function (c) {
+                        manual.push({ id: c.id, name: 'Lead ' + c.id,
+                          motivo: 'falha no lote (HTTP ' + xhr.status + ')' });
+                      });
+                      nextChunk();
+                    }
+                  });
+                })();
+              },
+              error: function (xhr) { batchError(xhr, 'Erro ao resolver regiões'); }
             });
-          },
-          error: function (xhr) { batchError(xhr, 'Erro ao buscar leads'); }
+          });
+        }, function (xhr) {
+          setStatus('<span style="color:#f44336">✗ Erro ao ler leads do Kommo (HTTP ' + xhr.status + ')</span>');
         });
       });
     }
@@ -856,9 +899,9 @@ define(['jquery'], function ($) {
           .on('click.ge', '#ge-btn-setregion-batch', function () {
             showModal(
               '🧭 Definir Região em Lote',
-              'Resolver e gravar a região de <b>todos os leads desta etapa</b> do funil?<br><br>' +
-              '<small>Bairros sem região ou de divisa (baixa confiança) não são gravados — ' +
-              'aparecem no fim para você revisar manualmente.</small>',
+              'Buscar no Kommo <b>todos os leads desta etapa</b> e gravar a região de cada um?<br><br>' +
+              '<small>Lê direto do Kommo (não só os que já geraram etiqueta). Bairros sem região ' +
+              'ou de divisa (baixa confiança) ficam de fora p/ revisão manual.</small>',
               doSetRegionBatch
             );
           })

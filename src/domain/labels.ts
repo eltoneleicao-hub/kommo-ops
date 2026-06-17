@@ -20,7 +20,7 @@ const requiredFields: Array<[keyof LabelInput, string]> = [
   ["neighborhood", "Bairro"],
   ["postalCode", "CEP"],
   ["city", "Cidade"],
-  ["internalOrderNotes", "Anotacoes internas do pedido"],
+  ["internalOrderNotes", "Região"],
 ];
 
 function clean(value: string | null | undefined): string {
