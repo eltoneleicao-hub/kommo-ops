@@ -28,8 +28,10 @@ export interface RegionResult {
   /** Região resolvida, ou null se não foi possível determinar. */
   regiao: Regiao | null;
   confidence: RegionConfidence;
-  /** Como foi resolvido. "fuzzy" = casou por aproximação (typo/abreviação). */
-  method: "bairro" | "fuzzy" | "cep" | "ambiguo-cep" | "indefinida";
+  /** Como foi resolvido. "fuzzy" = casou por aproximação (typo/abreviação).
+   *  "alias" = casou na tabela curada de variantes verificadas (prefixo omitido,
+   *  abreviação, ou bairro real fora da lista oficial de 6 regiões). */
+  method: "bairro" | "alias" | "fuzzy" | "cep" | "ambiguo-cep" | "indefinida";
   /** Texto do bairro normalizado usado na busca (debug). */
   matchedBairro?: string;
 }
@@ -52,7 +54,7 @@ export function normalizeBairro(value: string | null | undefined): string {
  */
 const ABBREV: Record<string, string> = {
   jd: "jardim", jrd: "jardim", jdm: "jardim", jardin: "jardim",
-  vl: "vila",
+  vl: "vila", villa: "vila",
   pq: "parque",
   res: "residencial", resid: "residencial",
   cj: "conjunto", conj: "conjunto",
@@ -240,6 +242,20 @@ const BAIRROS_POR_REGIAO: Record<Regiao, string[]> = {
   ],
 };
 
+/* ── Bairros SJC reais REGISTRADOS além da lista oficial das 6 regiões ─────────
+ * Bairros que existem em SJC mas não constavam na fonte (Wikipédia). Confirmados
+ * por pesquisa + verificação adversarial (loteamento da prefeitura, vizinhança).
+ * Entram no índice como first-class (match exato + fuzzy + núcleo funcionam).
+ */
+const BAIRROS_EXTRA: Record<Regiao, string[]> = {
+  Centro: [],
+  Norte: ["Jardim Telespark", "Jardim Minas Gerais"],
+  Sul: ["Jardim Morumbi", "Jardim Primavera"],
+  Leste: ["Jardim das Paineiras II", "Setville Altos de São José", "Setville"],
+  Oeste: [],
+  Sudeste: [],
+};
+
 /* ── Bairros de fronteira: confiança reduzida mesmo quando casam por nome ────
  * (o nome aparecia em 2 regiões nas fontes; foi alocado pela melhor evidência).
  */
@@ -283,13 +299,151 @@ const CEP5_REGIAO: Record<string, Regiao> = {
 /* ── Índice normalizado (construído 1x) ──────────────────────────────────────*/
 const BAIRRO_INDEX: Map<string, Regiao> = (() => {
   const idx = new Map<string, Regiao>();
-  (Object.keys(BAIRROS_POR_REGIAO) as Regiao[]).forEach((regiao) => {
-    for (const bairro of BAIRROS_POR_REGIAO[regiao]) {
-      idx.set(bairroKey(bairro), regiao);
-    }
-  });
+  const fontes = [BAIRROS_POR_REGIAO, BAIRROS_EXTRA];
+  for (const fonte of fontes) {
+    (Object.keys(fonte) as Regiao[]).forEach((regiao) => {
+      for (const bairro of fonte[regiao]) {
+        idx.set(bairroKey(bairro), regiao);
+      }
+    });
+  }
   return idx;
 })();
+
+/* ── Aliases verificados (variantes reais de formulário) ──────────────────────
+ * Tabela curada a partir de leads reais que caíam em "revisão manual": variantes
+ * com prefixo omitido ("Betânia" p/ Vila Betânia), abreviações ("J das Indústria"),
+ * grafias alternativas ("Sam Marino"), e bairros SJC reais que NÃO estão na lista
+ * oficial das 6 regiões (Jardim Telespark, Setville, Jardim das Paineiras II,
+ * Jardim Morumbi, Jardim Minas Gerais).
+ *
+ * Cada entrada foi confirmada por pesquisa + verificação adversarial (web/Correios).
+ * Bairros de OUTRAS cidades (Jacareí, Taubaté, Mogi, SP capital, litoral) e casos
+ * ambíguos NÃO entram aqui de propósito — seguem p/ revisão manual (não dá p/
+ * chutar região: a etiqueta vira entrega física). Confiança "media" (variante
+ * inferida, não match literal no índice oficial).
+ */
+const ALIAS_SOURCE: Array<[string, Regiao]> = [
+  // Centro
+  ["Betânia", "Centro"],            // Vila Betânia
+  ["Oswaldo Cruz", "Centro"],       // Jardim Oswaldo Cruz
+  // Norte
+  ["Altos de Santana", "Norte"],    // Jardim Altos de Santana
+  ["Altos Santana", "Norte"],
+  ["Jardim Telespark", "Norte"],    // bairro real fora da lista oficial
+  ["Telespark", "Norte"],
+  ["Jardim Minas Gerais", "Norte"], // bairro real fora da lista oficial
+  ["Jardim MG", "Norte"],
+  // Sul
+  ["San Marino", "Sul"],            // Res. San Marino
+  ["Sam Marino", "Sul"],
+  ["Jardim San Marino", "Sul"],
+  ["Jardim Sam Marino", "Sul"],
+  ["31 de Março", "Sul"],           // Conj. Res. 31 de Março
+  ["31 Março", "Sul"],
+  ["Trinta e Um de Março", "Sul"],
+  ["Trinta Um de Março", "Sul"],
+  ["Palmeiras", "Sul"],             // Palmeiras de São José
+  ["Palmeiras São José", "Sul"],
+  ["Oriente", "Sul"],               // Jardim Oriente
+  ["Residencial União", "Sul"],     // Parque Residencial União
+  ["Terras do Sul", "Sul"],         // Jardim Terras do Sul
+  ["Sol Nascente", "Sul"],          // Conj. Res. Sol Nascente
+  ["Residencial Sol Nascente", "Sul"],
+  ["Independência", "Sul"],         // Parque Independência
+  ["Vale do Sol", "Sul"],           // Jardim Vale do Sol
+  ["Morumbi", "Sul"],               // Cidade Morumbi / Jardim Morumbi
+  ["Jardim Morumbi", "Sul"],        // bairro real fora da lista oficial
+  ["Jardim Primavera", "Sul"],      // bairro real fora da lista oficial (zona Sul)
+  ["Parque Industrial SJC", "Sul"], // Parque Industrial (sufixo "SJC")
+  // Leste
+  ["Nova Michigan", "Leste"],       // Jardim/Nova Michigan
+  ["Galo Branco", "Leste"],         // Res. Galo Branco
+  ["Jardim Paineiras", "Leste"],    // Jardim das Paineiras II
+  ["Jardim Paineiras II", "Leste"],
+  ["Jardim Paineiras lI", "Leste"], // typo real "lI" no lugar de "II"
+  ["Jardim das Paineiras", "Leste"],
+  ["Jardim das Paineiras II", "Leste"],
+  ["Setville", "Leste"],            // Setville Altos de São José (fora da lista oficial)
+  ["Set Ville", "Leste"],
+  ["Setville Altos de São José", "Leste"],
+  ["Novo Horizonte", "Leste"],      // Parque Novo Horizonte
+  ["Parque Novo Horizonte", "Leste"],
+  ["Mantiqueira", "Leste"],         // Mantiqueira I/II
+  ["Residencial Mantiqueira", "Leste"],
+  // Sudeste
+  ["CTA", "Sudeste"],               // DCTA
+  ["DCTA", "Sudeste"],
+  ["Campus do CTA", "Sudeste"],
+  ["Santa Julia", "Sudeste"],       // Jardim Santa Julia
+  ["São Judas Tadeu", "Sudeste"],   // Jardim/Conj. São Judas Tadeu
+  // Oeste
+  ["J das Industria", "Oeste"],     // Jardim das Indústrias
+  ["Jardim das Industria", "Oeste"],
+];
+
+const ALIAS_INDEX: Map<string, Regiao> = (() => {
+  const idx = new Map<string, Regiao>();
+  for (const [variant, regiao] of ALIAS_SOURCE) {
+    const key = bairroKey(variant);
+    // Não sobrescreve o índice oficial; alias só preenche o que faltava.
+    if (!BAIRRO_INDEX.has(key)) idx.set(key, regiao);
+  }
+  return idx;
+})();
+
+/* ── Casamento por NÚCLEO do nome (tolerante a prefixo/sufixo) ────────────────
+ * "Entende correspondências": um bairro escrito SEM o descritor genérico
+ * ("Betânia" → Vila Betânia, "Galo Branco" → Res. Galo Branco) casa pelo núcleo.
+ *
+ * Segurança (entrega física — não pode chutar região):
+ *  - Só resolve quando TODAS as ocorrências do núcleo no índice apontam p/ UMA
+ *    região (núcleo ambíguo entre regiões → manual).
+ *  - Núcleo precisa ter ≥5 caracteres (evita "ema", "rubi"…).
+ *  - CORE_BLOCK: núcleos genéricos OU que a verificação adversarial reprovou
+ *    (índice tem um homônimo enganoso, mas o bairro real é de outra região/cidade).
+ */
+const STRIP_PREFIX = new Set([
+  "vila", "jardim", "parque", "residencial", "conjunto", "condominio",
+  "loteamento", "bosque", "chacara", "chacaras", "favela", "cidade",
+  "projeto", "sitio", "habitacional", "recanto", "fazenda",
+]);
+
+const CORE_BLOCK = new Set([
+  // reprovados pela verificação (índice tem homônimo, bairro real é ambíguo/fora)
+  "floresta", "sao pedro", "planalto", "iracema",
+  // genéricos / colisão com cidade ou nome comum
+  "sao paulo", "santos", "maria", "industrial", "imperial", "paulista",
+]);
+
+function coreKey(norm: string): string {
+  let toks = norm.split(" ").filter(Boolean);
+  while (toks.length > 1 && STRIP_PREFIX.has(toks[0])) toks.shift();
+  const isNum = (t: string) => /^[0-9]+$/.test(t) || /^(i|ii|iii|iv|v|vi)$/.test(t);
+  while (toks.length > 1 && isNum(toks[toks.length - 1])) toks.pop();
+  return toks.join(" ");
+}
+
+const CORE_INDEX: Map<string, Regiao> = (() => {
+  const acc = new Map<string, Set<Regiao>>();
+  for (const [key, regiao] of BAIRRO_INDEX) {
+    const core = coreKey(key);
+    if (core.length < 5 || CORE_BLOCK.has(core)) continue;
+    if (!acc.has(core)) acc.set(core, new Set());
+    acc.get(core)!.add(regiao);
+  }
+  const idx = new Map<string, Regiao>();
+  for (const [core, regioes] of acc) {
+    if (regioes.size === 1) idx.set(core, [...regioes][0]); // só núcleos não-ambíguos
+  }
+  return idx;
+})();
+
+function regiaoPorNucleo(norm: string): Regiao | null {
+  const core = coreKey(norm);
+  if (core.length < 5 || CORE_BLOCK.has(core)) return null;
+  return CORE_INDEX.get(core) ?? null;
+}
 
 function cep5(cep: string | null | undefined): string {
   const digits = String(cep ?? "").replace(/\D/g, "");
@@ -328,6 +482,20 @@ export function resolveRegion(
     }
 
     return { regiao, confidence: "alta", method: "bairro", matchedBairro: norm };
+  }
+
+  // 1.4 Alias curado (variante verificada: prefixo omitido, abreviação, ou
+  //     bairro real fora da lista oficial das 6 regiões).
+  if (norm && ALIAS_INDEX.has(norm)) {
+    return { regiao: ALIAS_INDEX.get(norm)!, confidence: "media", method: "alias", matchedBairro: norm };
+  }
+
+  // 1.45 Núcleo do nome (prefixo genérico omitido): "Betânia" → Vila Betânia.
+  if (norm) {
+    const porNucleo = regiaoPorNucleo(norm);
+    if (porNucleo) {
+      return { regiao: porNucleo, confidence: "media", method: "alias", matchedBairro: norm };
+    }
   }
 
   // 1.5 Casamento aproximado (typo/abreviação não mapeada): ex. "Barrinho".

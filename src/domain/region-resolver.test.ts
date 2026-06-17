@@ -87,6 +87,91 @@ describe("resolveRegion — abreviações expandidas", () => {
   });
 });
 
+describe("resolveRegion — aliases verificados (variantes que caíam em manual)", () => {
+  const casos: Array<[string, string]> = [
+    ["Betania", "Centro"],
+    ["Oswaldo Cruz", "Centro"],
+    ["Altos de santana", "Norte"],
+    ["Jardim Telespark", "Norte"],
+    ["Jd MG", "Norte"],
+    ["Jardim San Marino", "Sul"],
+    ["Jardim Sam Marino", "Sul"],
+    ["Jd San Marino", "Sul"],
+    ["31 de março", "Sul"],
+    ["Trinta e um de março", "Sul"],
+    ["Palmeiras", "Sul"],
+    ["Oriente", "Sul"],
+    ["Residencial União", "Sul"],
+    ["Residencial união", "Sul"],
+    ["Terras do sul", "Sul"],
+    ["Residencial Sol Nascente", "Sul"],
+    ["Independencia", "Sul"],
+    ["Vale do Sol", "Sul"],
+    ["Jardim Morumbi", "Sul"],
+    ["Pq Industrial Sjc", "Sul"],
+    ["Nova Michigan", "Leste"],
+    ["Galo Branco", "Leste"],
+    ["JD Paineiras lI", "Leste"],
+    ["Set Ville", "Leste"],
+    ["Novo Horizonte", "Leste"],
+    ["Residencial Mantiqueira", "Leste"],
+    ["CTA", "Sudeste"],
+    ["Campus do CTA", "Sudeste"],
+    ["Santa Julia", "Sudeste"],
+    ["São Judas Tadeu", "Sudeste"],
+    ["J das industria", "Oeste"],
+  ];
+  casos.forEach(([entrada, regiao]) => {
+    it(`"${entrada}" → ${regiao} (gravável: alta/media)`, () => {
+      const r = resolveRegion(entrada);
+      expect(r.regiao).toBe(regiao);
+      // precisa ser gravável no lote (o widget só grava alta/media, não baixa)
+      expect(r.confidence === "alta" || r.confidence === "media").toBe(true);
+    });
+  });
+});
+
+describe("resolveRegion — núcleo do nome (prefixo genérico omitido)", () => {
+  const casos: Array<[string, string]> = [
+    ["Satélite", "Sul"],          // Jardim Satélite
+    ["Aquarius", "Oeste"],        // Parque/Residencial ... Aquarius
+    ["Topázio", "Centro"],        // Jardim Topázio (núcleo único)
+    ["Bela Vista", "Centro"],     // Jardim Bela Vista
+    ["Bosque dos Eucaliptos", "Sul"],
+  ];
+  casos.forEach(([entrada, regiao]) => {
+    it(`"${entrada}" → ${regiao}`, () => {
+      const r = resolveRegion(entrada);
+      expect(r.regiao).toBe(regiao);
+      expect(r.confidence === "alta" || r.confidence === "media").toBe(true);
+    });
+  });
+});
+
+describe("resolveRegion — SEGURANÇA: ambíguos/reprovados NÃO podem ser chutados", () => {
+  // Núcleos com homônimo enganoso no índice (verificação reprovou) ou ambíguos
+  // entre 2 regiões: têm que ficar null, NUNCA resolver p/ uma região.
+  ["Floresta", "Jardim São Pedro", "Parque Planalto", "Jardim Iracema",
+   "Parque Imperial", "São Paulo", "Industrial",
+   "Nova Esperança"].forEach((b) => {
+    it(`"${b}" → null (ambíguo/reprovado)`, () => {
+      expect(resolveRegion(b).regiao).toBeNull();
+    });
+  });
+});
+
+describe("resolveRegion — fora de SJC / incertos seguem p/ manual (null)", () => {
+  // Bairros de OUTRAS cidades NÃO podem virar região de SJC (entrega física).
+  ["Mooca", "Vila Branca", "Cidade Salvador", "Quiririm", "Mogilar",
+   "Freguesia do Ó", "Cesar de Souza", "Pacaembu", "Jardim Stettel",
+   "Jardim Califórnia", "Residencial Terras do Vale", "Mirante do Vale",
+   "Jardim Campo Grande", "Vila Pantaleão", "Morada dos Nobres"].forEach((b) => {
+    it(`"${b}" → null (revisão manual)`, () => {
+      expect(resolveRegion(b).regiao).toBeNull();
+    });
+  });
+});
+
 describe("resolveRegion — fuzzy (erros de digitação)", () => {
   it("Barrinho → Bairrinho → Leste (media, fuzzy)", () => {
     const r = resolveRegion("Barrinho");

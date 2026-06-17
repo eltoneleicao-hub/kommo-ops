@@ -159,6 +159,23 @@ define(['jquery'], function ($) {
       $modal.css('display', 'flex');
     }
 
+    // Seletor de MODO do "Definir Região (Lote)": só os sem região (fallback,
+    // não regrava quem já tem) ou todos. A escolha dispara doSetRegionBatch.
+    function showSetRegionBatchChoice() {
+      var $modal = $('#ge-modal');
+      $modal.find('#ge-modal-title').html('🧭 Definir Região em Lote');
+      $modal.find('#ge-modal-body').html(
+        '<div style="font-size:12px;color:#666;margin-bottom:10px">Buscar <b>todos os leads desta etapa</b> no Kommo e gravar a região. Escolha o alcance:</div>' +
+        '<div style="display:grid;gap:6px">' +
+          '<button class="ge-setregion-mode" data-mode="empty" style="padding:10px 4px;background:#3F51B5;color:#fff;border:none;border-radius:5px;font-size:12px;font-weight:700;cursor:pointer">Só quem está SEM região</button>' +
+          '<button class="ge-setregion-mode" data-mode="all" style="padding:10px 4px;background:#5C6BC0;color:#fff;border:none;border-radius:5px;font-size:12px;font-weight:700;cursor:pointer">Todos (regrava todos)</button>' +
+        '</div>' +
+        '<div style="font-size:11px;color:#999;margin-top:8px">Sem bairro reconhecido, de divisa (baixa confiança) ou de outra cidade ficam de fora p/ revisão manual.</div>'
+      );
+      $modal.find('#ge-modal-confirm').hide(); // a escolha do modo é a ação
+      $modal.css('display', 'flex');
+    }
+
     /* ── API calls ───────────────────────────────────────────────────────── */
 
     // Normaliza um lead (v4 ou current_card) para um formato único
@@ -789,9 +806,44 @@ define(['jquery'], function ($) {
 
     // Monta o resumo final do lote (gravados, falhas e a lista de pendências
     // que o operador precisa resolver na mão).
-    function renderRegionBatchSummary(ok, fail, manual) {
+    // Gera um CSV (com BOM p/ Excel abrir acentos) e dispara o download no navegador.
+    function downloadCsv(filename, header, rows) {
+      function esc(v) {
+        var s = String(v == null ? '' : v);
+        return /[",;\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+      }
+      var lines = [header.map(esc).join(';')];
+      rows.forEach(function (r) { lines.push(r.map(esc).join(';')); });
+      var csv = '﻿' + lines.join('\r\n'); // BOM + CRLF
+      var blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+      var url = URL.createObjectURL(blob);
+      var a = document.createElement('a');
+      a.href = url; a.download = filename;
+      document.body.appendChild(a); a.click();
+      setTimeout(function () { document.body.removeChild(a); URL.revokeObjectURL(url); }, 0);
+    }
+
+    // Guarda a última lista manual p/ o botão de CSV.
+    var _lastManual = [];
+    function exportManualCsv() {
+      if (!_lastManual.length) return;
+      var sub = '';
+      try { sub = self.system().subdomain; } catch (e) {}
+      var header = ['Lead ID', 'Nome', 'Bairro', 'Sugestão região', 'Motivo', 'Link Kommo'];
+      var rows = _lastManual.map(function (m) {
+        var link = sub ? ('https://' + sub + '.kommo.com/leads/detail/' + m.id) : '';
+        return [m.id, m.name || '', m.bairro || '', m.sugestao || '', m.motivo || '', link];
+      });
+      downloadCsv('leads-sem-regiao.csv', header, rows);
+    }
+
+    function renderRegionBatchSummary(ok, fail, manual, skipped) {
+      _lastManual = manual || [];
       var html = '<span style="color:#4CAF50;font-weight:bold">✓ ' + ok +
         ' região(ões) gravada(s)</span>';
+      if (skipped) {
+        html += '<br><small style="color:#999">↷ ' + skipped + ' já tinham região (pulados)</small>';
+      }
       if (fail) {
         html += '<br><span style="color:#f44336">✗ ' + fail + ' falha(s) ao gravar</span>';
       }
@@ -801,7 +853,9 @@ define(['jquery'], function ($) {
             ' <small style="color:#999">(' + m.motivo + ')</small></li>';
         }).join('');
         html += '<br><span style="color:#FF9800;font-weight:bold">⚠ ' + manual.length +
-          ' p/ revisar manual:</span>' +
+          ' p/ revisar manual:</span> ' +
+          '<button id="ge-csv-manual" style="padding:2px 8px;background:#607D8B;color:#fff;border:none;' +
+          'border-radius:4px;font-size:11px;font-weight:700;cursor:pointer">⬇️ CSV</button>' +
           '<ul style="margin:4px 0 0 16px;padding:0;max-height:140px;overflow:auto">' +
           items + '</ul>';
         try { console.log('[GE] região em lote — pendências manuais:', manual); } catch (e) {}
@@ -848,7 +902,7 @@ define(['jquery'], function ($) {
     // Resolve + grava a região de todos os leads da ETAPA ATUAL, lidos direto do
     // Kommo (não só os já etiquetados). Bairros sem região, de baixa confiança
     // (divisa) ou sem opção no dropdown ficam de fora p/ revisão manual.
-    function doSetRegionBatch() {
+    function doSetRegionBatch(onlyEmpty) {
       setStatus('⏳ Lendo leads da etapa no Kommo...');
 
       getLead(function (err, lead) {
@@ -870,9 +924,13 @@ define(['jquery'], function ($) {
             }
 
             // 3. Extrai bairro/CEP de cada lead p/ resolver no backend em 1 chamada.
+            //    Modo "onlyEmpty" (fallback): pula quem já tem região gravada.
             var meta = {};
-            var items = kommoLeads.map(function (l) {
+            var items = [];
+            var skipped = 0; // já tinham região (só no modo onlyEmpty)
+            kommoLeads.forEach(function (l) {
               var fields = l.custom_fields_values || [];
+              if (onlyEmpty && extractField(fields, ['Região', 'Regiao'])) { skipped++; return; }
               var info = {
                 id: String(l.id),
                 name: l.name || ('Lead ' + l.id),
@@ -880,10 +938,18 @@ define(['jquery'], function ($) {
                 cep: extractField(fields, ['CEP', 'Cep'])
               };
               meta[info.id] = info;
-              return { id: info.id, bairro: info.bairro, cep: info.cep };
+              items.push({ id: info.id, bairro: info.bairro, cep: info.cep });
             });
 
-            setStatus('⏳ Resolvendo ' + items.length + ' região(ões)...');
+            if (!items.length) {
+              setStatus('<span style="color:#999">' +
+                (onlyEmpty ? 'Todos os ' + skipped + ' leads desta etapa já têm região 🎉' : 'Nenhum lead nesta etapa') +
+                '</span>');
+              return;
+            }
+
+            setStatus('⏳ Resolvendo ' + items.length + ' região(ões)' +
+              (skipped ? ' (' + skipped + ' já tinham, pulados)' : '') + '...');
             $.ajax({
               url: apiBase() + '/api/region/resolve-batch',
               method: 'POST',
@@ -898,15 +964,15 @@ define(['jquery'], function ($) {
                 results.forEach(function (r) {
                   var info = meta[String(r.id)] || { name: 'Lead ' + r.id, bairro: '' };
                   if (!r.regiao) {
-                    manual.push({ id: r.id, name: info.name,
+                    manual.push({ id: r.id, name: info.name, bairro: info.bairro || '', sugestao: '',
                       motivo: 'sem região — bairro "' + (info.bairro || '—') + '"' });
                   } else if (r.confidence === 'baixa') {
-                    manual.push({ id: r.id, name: info.name,
+                    manual.push({ id: r.id, name: info.name, bairro: info.bairro || '', sugestao: r.regiao,
                       motivo: 'divisa/incerto → sugestão ' + r.regiao });
                   } else {
                     var values = buildRegionValues(field, r.regiao);
                     if (!values) {
-                      manual.push({ id: r.id, name: info.name,
+                      manual.push({ id: r.id, name: info.name, bairro: info.bairro || '', sugestao: r.regiao,
                         motivo: 'sem opção "' + r.regiao + '" no dropdown' });
                     } else {
                       toWrite.push({ id: Number(r.id) || r.id,
@@ -916,7 +982,7 @@ define(['jquery'], function ($) {
                 });
 
                 if (!toWrite.length) {
-                  renderRegionBatchSummary(0, 0, manual);
+                  renderRegionBatchSummary(0, 0, manual, skipped);
                   return;
                 }
 
@@ -924,7 +990,7 @@ define(['jquery'], function ($) {
                 //    chunks sequenciais (respeita o rate limit do Kommo).
                 var CHUNK = 50, ok = 0, fail = 0, idx = 0, total = toWrite.length;
                 (function nextChunk() {
-                  if (idx >= total) { renderRegionBatchSummary(ok, fail, manual); return; }
+                  if (idx >= total) { renderRegionBatchSummary(ok, fail, manual, skipped); return; }
                   var chunk = toWrite.slice(idx, idx + CHUNK);
                   idx += chunk.length;
                   setStatus('⏳ Gravando ' + Math.min(idx, total) + '/' + total + '...');
@@ -938,7 +1004,8 @@ define(['jquery'], function ($) {
                     error: function (xhr) {
                       fail += chunk.length;
                       chunk.forEach(function (c) {
-                        manual.push({ id: c.id, name: 'Lead ' + c.id,
+                        var mi = meta[String(c.id)] || { name: 'Lead ' + c.id, bairro: '' };
+                        manual.push({ id: c.id, name: mi.name, bairro: mi.bairro || '', sugestao: '',
                           motivo: 'falha no lote (HTTP ' + xhr.status + ')' });
                       });
                       nextChunk();
@@ -1030,13 +1097,15 @@ define(['jquery'], function ($) {
             );
           })
           .on('click.ge', '#ge-btn-setregion-batch', function () {
-            showModal(
-              '🧭 Definir Região em Lote',
-              'Buscar no Kommo <b>todos os leads desta etapa</b> e gravar a região de cada um?<br><br>' +
-              '<small>Lê direto do Kommo (não só os que já geraram etiqueta). Bairros sem região ' +
-              'ou de divisa (baixa confiança) ficam de fora p/ revisão manual.</small>',
-              doSetRegionBatch
-            );
+            showSetRegionBatchChoice();
+          })
+          .on('click.ge', '.ge-setregion-mode', function () {
+            var mode = String($(this).attr('data-mode'));
+            $('#ge-modal').css('display', 'none');
+            doSetRegionBatch(mode === 'empty');
+          })
+          .on('click.ge', '#ge-csv-manual', function () {
+            exportManualCsv();
           })
           .on('click.ge', '#ge-btn-region-batch', function () {
             showRegionPicker();
