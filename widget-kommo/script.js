@@ -354,56 +354,7 @@ define(['jquery'], function ($) {
       });
     }
 
-    /* ── Generate batch ──────────────────────────────────────────────────── */
-
-    function doGenerateBatch() {
-      setStatus('⏳ Buscando dados...');
-      var settings = cfg();
-
-      getLead(function (err, lead) {
-        if (err) {
-          setStatus('<span style="color:#f44336">✗ ' + err.message + '</span>');
-          return;
-        }
-
-        if (!pipelineAllowed(lead.pipeline_id)) { pipelineBlocked(); return; }
-
-        $.ajax({
-          url: apiBase() + '/api/kommo/requests-batch',
-          method: 'POST',
-          contentType: 'application/json',
-          data: JSON.stringify({
-            secret: settings.api_key,
-            kommoPipelineId: String(lead.pipeline_id),
-            kommoStageId: String(lead.status_id),
-            deductStock: true
-          }),
-          success: function (data) {
-            setStatus(
-              '<span style="color:#4CAF50;font-weight:bold">✓ Lote processado!</span><br>' +
-              '<small>' + data.generated + ' etiquetas geradas</small>' +
-              (data.incomplete > 0 ? '<br><small style="color:#FF9800">' + data.incomplete + ' incompletos</small>' : '') +
-              (data.stockDeducted > 0 ? '<br><small>📦 ' + data.stockDeducted + ' convites deduzidos</small>' : '')
-            );
-            refreshStock();
-          },
-          error: function (xhr) {
-            var msg = 'Erro ao gerar lote';
-            try {
-              var d = JSON.parse(xhr.responseText);
-              if (d.error === 'insufficient_stock') {
-                msg = 'Estoque insuficiente — disponível: ' + d.available + ', necessário: ' + d.needed;
-              } else {
-                msg = d.message || d.error || msg;
-              }
-            } catch (e) {}
-            setStatus('<span style="color:#f44336">✗ ' + msg + '</span>');
-          }
-        });
-      });
-    }
-
-    /* ── Lote por Região ─────────────────────────────────────────────────── */
+    /* ── Lote (com seleção) ──────────────────────────────────────────────── */
 
     // Erro padrão de chamadas de lote (trata estoque insuficiente).
     function batchError(xhr, fallback) {
@@ -417,69 +368,108 @@ define(['jquery'], function ($) {
       setStatus('<span style="color:#f44336">✗ ' + msg + '</span>');
     }
 
-    // 2ª etapa: conta os leads da região nesta etapa e pede confirmação.
-    function startRegionBatch(region) {
-      setStatus('⏳ Contando leads da região ' + region + '...');
+    // Modal de SELEÇÃO de leads (checkboxes). Usado por Lote e Lote por Região.
+    function showLeadSelection(title, leads, onConfirm) {
+      var $modal = $('#ge-modal');
+      $modal.find('#ge-modal-title').html(title);
+
+      var eligibles = leads.filter(function (l) { return l.eligible; });
+      if (!eligibles.length) {
+        $modal.find('#ge-modal-body').html(
+          '<div style="font-size:12px;color:#999">Nenhum lead elegível (todos com campos faltando).</div>'
+        );
+        $modal.find('#ge-modal-confirm').hide();
+        $modal.css('display', 'flex');
+        return;
+      }
+
+      var rows = leads.map(function (l) {
+        var sub = [l.neighborhood, l.regiao].filter(Boolean).join(' · ');
+        if (l.eligible) {
+          return '<label style="display:flex;gap:6px;align-items:flex-start;padding:5px 0;font-size:12px;cursor:pointer">' +
+            '<input type="checkbox" class="ge-sel" value="' + l.kommoLeadId + '" checked style="margin-top:2px">' +
+            '<span>' + (l.recipientName || '(sem nome)') +
+            (sub ? ' <small style="color:#999">' + sub + '</small>' : '') + '</span></label>';
+        }
+        return '<div style="padding:5px 0;font-size:12px;color:#c0c0c0">⚠ ' + (l.recipientName || '(sem nome)') +
+          ' <small>falta: ' + (l.missingFields || []).join(', ') + '</small></div>';
+      }).join('');
+
+      $modal.find('#ge-modal-body').html(
+        '<label style="display:flex;gap:6px;align-items:center;font-size:12px;font-weight:700;margin-bottom:6px;cursor:pointer">' +
+          '<input type="checkbox" id="ge-sel-all" checked> Selecionar todos (' + eligibles.length + ' elegíveis)</label>' +
+        '<div style="max-height:240px;overflow:auto;border-top:1px solid #eee;padding-top:6px">' + rows + '</div>'
+      );
+
+      $modal.find('#ge-modal-confirm').show().off('click').on('click', function () {
+        var ids = [];
+        $modal.find('.ge-sel:checked').each(function () { ids.push(String($(this).val())); });
+        if (!ids.length) return; // nada selecionado → não faz nada
+        $modal.css('display', 'none');
+        onConfirm(ids);
+      });
+
+      $modal.css('display', 'flex');
+    }
+
+    // Busca os candidatos (modo lista) e abre o seletor. region = null => todos.
+    function fetchAndSelect(region) {
+      setStatus('⏳ Buscando leads' + (region ? ' da região ' + region : '') + '...');
       getLead(function (err, lead) {
         if (err) { setStatus('<span style="color:#f44336">✗ ' + err.message + '</span>'); return; }
         if (!pipelineAllowed(lead.pipeline_id)) { pipelineBlocked(); return; }
+        var body = {
+          secret: cfg().api_key,
+          kommoPipelineId: String(lead.pipeline_id),
+          kommoStageId: String(lead.status_id),
+          list: true
+        };
+        if (region) body.region = region;
         $.ajax({
           url: apiBase() + '/api/kommo/requests-batch',
           method: 'POST',
           contentType: 'application/json',
-          data: JSON.stringify({
-            secret: cfg().api_key,
-            kommoPipelineId: String(lead.pipeline_id),
-            kommoStageId: String(lead.status_id),
-            region: region,
-            countOnly: true
-          }),
+          data: JSON.stringify(body),
           success: function (data) {
-            var n = data.eligible || 0;
-            if (n === 0) {
-              setStatus('<span style="color:#999">Nenhum lead elegível na região ' + region + ' nesta etapa</span>');
+            var leads = (data && data.leads) || [];
+            if (!leads.length) {
+              setStatus('<span style="color:#999">Nenhum lead' + (region ? ' na região ' + region : '') + ' nesta etapa</span>');
               return;
             }
-            showModal(
-              '🗺️ Lote — ' + region,
-              'Encontrados <strong>' + n + '</strong> lead(s) na região <strong>' + region + '</strong> desta etapa.<br><br>' +
-              'Gerar/reimprimir as etiquetas em lote?',
-              function () { doRegionBatch(region); }
-            );
+            var title = region ? ('🗺️ Lote — ' + region) : '📦 Gerar Lote';
+            showLeadSelection(title, leads, function (ids) { doBatchSelected(region, ids, lead); });
           },
-          error: function (xhr) { batchError(xhr, 'Erro ao contar leads da região'); }
+          error: function (xhr) { batchError(xhr, 'Erro ao buscar leads'); }
         });
       });
     }
 
-    // 3ª etapa: gera o lote da região.
-    function doRegionBatch(region) {
-      setStatus('⏳ Gerando lote da região ' + region + '...');
-      getLead(function (err, lead) {
-        if (err) { setStatus('<span style="color:#f44336">✗ ' + err.message + '</span>'); return; }
-        if (!pipelineAllowed(lead.pipeline_id)) { pipelineBlocked(); return; }
-        $.ajax({
-          url: apiBase() + '/api/kommo/requests-batch',
-          method: 'POST',
-          contentType: 'application/json',
-          data: JSON.stringify({
-            secret: cfg().api_key,
-            kommoPipelineId: String(lead.pipeline_id),
-            kommoStageId: String(lead.status_id),
-            region: region,
-            deductStock: true
-          }),
-          success: function (data) {
-            setStatus(
-              '<span style="color:#4CAF50;font-weight:bold">✓ Lote ' + region + ' processado!</span><br>' +
-              '<small>' + data.generated + ' etiquetas</small>' +
-              (data.incomplete > 0 ? '<br><small style="color:#FF9800">' + data.incomplete + ' incompletos</small>' : '') +
-              (data.stockDeducted > 0 ? '<br><small>📦 ' + data.stockDeducted + ' convites deduzidos</small>' : '')
-            );
-            refreshStock();
-          },
-          error: function (xhr) { batchError(xhr, 'Erro ao gerar lote da região'); }
-        });
+    // Gera apenas os leads selecionados.
+    function doBatchSelected(region, ids, lead) {
+      setStatus('⏳ Gerando ' + ids.length + ' etiqueta(s)...');
+      var body = {
+        secret: cfg().api_key,
+        kommoPipelineId: String(lead.pipeline_id),
+        kommoStageId: String(lead.status_id),
+        kommoLeadIds: ids,
+        deductStock: true
+      };
+      if (region) body.region = region;
+      $.ajax({
+        url: apiBase() + '/api/kommo/requests-batch',
+        method: 'POST',
+        contentType: 'application/json',
+        data: JSON.stringify(body),
+        success: function (data) {
+          setStatus(
+            '<span style="color:#4CAF50;font-weight:bold">✓ ' + (region ? 'Lote ' + region : 'Lote') + ' processado!</span><br>' +
+            '<small>' + data.generated + ' etiqueta(s)</small>' +
+            (data.incomplete > 0 ? '<br><small style="color:#FF9800">' + data.incomplete + ' incompletos</small>' : '') +
+            (data.stockDeducted > 0 ? '<br><small>📦 ' + data.stockDeducted + ' convites deduzidos</small>' : '')
+          );
+          refreshStock();
+        },
+        error: function (xhr) { batchError(xhr, 'Erro ao gerar lote'); }
       });
     }
 
@@ -662,11 +652,7 @@ define(['jquery'], function ($) {
             );
           })
           .on('click.ge', '#ge-btn-batch', function () {
-            showModal(
-              '📦 Gerar Lote',
-              'Gerar etiquetas para todos os leads elegíveis desta etapa e deduzir do estoque?',
-              doGenerateBatch
-            );
+            fetchAndSelect(null);
           })
           .on('click.ge', '#ge-btn-region', function () {
             showModal(
@@ -681,7 +667,10 @@ define(['jquery'], function ($) {
           .on('click.ge', '.ge-region-opt', function () {
             var region = String($(this).attr('data-region'));
             $('#ge-modal').css('display', 'none');
-            startRegionBatch(region);
+            fetchAndSelect(region);
+          })
+          .on('change.ge', '#ge-sel-all', function () {
+            $('#ge-modal').find('.ge-sel').prop('checked', $(this).prop('checked'));
           })
           .on('click.ge', '#ge-modal-cancel', function () {
             $('#ge-modal').css('display', 'none');

@@ -13,6 +13,10 @@ const batchPayloadSchema = z.object({
   deductStock: z.boolean().optional().default(false),
   // Filtra o lote por região (resolvida do bairro/CEP). Omitido = todas.
   region: z.string().optional(),
+  // Modo lista: devolve os candidatos (para seleção no widget), sem gerar.
+  list: z.boolean().optional().default(false),
+  // Seleção: gera apenas estes leads (por kommoLeadId). Omitido = todos.
+  kommoLeadIds: z.array(z.string()).optional(),
 });
 
 export async function POST(request: NextRequest) {
@@ -25,7 +29,7 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
 
-  const { kommoPipelineId, kommoStageId, countOnly, deductStock, region } = parsed.data;
+  const { kommoPipelineId, kommoStageId, countOnly, deductStock, region, list, kommoLeadIds } = parsed.data;
 
   const allRequests = await prisma.materialRequest.findMany({
     where: {
@@ -48,9 +52,8 @@ export async function POST(request: NextRequest) {
       )
     : allRequests;
 
-  // Modo contagem: apenas informa quantos leads são elegíveis
-  const eligible = materialRequests.filter((r) => {
-    const missing = validateLabelInput({
+  const missingOf = (r: (typeof allRequests)[number]) =>
+    validateLabelInput({
       recipientName: r.recipientName,
       recipientPhone: r.recipientPhone,
       street: r.street,
@@ -61,11 +64,37 @@ export async function POST(request: NextRequest) {
       complement: r.complement,
       internalOrderNotes: r.internalOrderNotes,
     });
-    return missing.length === 0;
-  }).length;
+
+  // Modo lista: devolve os candidatos para seleção no widget (não gera nada).
+  if (list) {
+    return NextResponse.json({
+      total: materialRequests.length,
+      leads: materialRequests.map((r) => {
+        const missing = missingOf(r);
+        return {
+          kommoLeadId: r.kommoLeadId,
+          recipientName: r.recipientName ?? "",
+          neighborhood: r.neighborhood ?? "",
+          city: r.city ?? "",
+          regiao: resolveRegion(r.neighborhood, r.postalCode).regiao,
+          eligible: missing.length === 0,
+          missingFields: missing,
+        };
+      }),
+    });
+  }
+
+  // Seleção: gera apenas os leads escolhidos (se a lista foi enviada).
+  const toProcess =
+    kommoLeadIds && kommoLeadIds.length
+      ? materialRequests.filter((r) => r.kommoLeadId && kommoLeadIds.includes(r.kommoLeadId))
+      : materialRequests;
+
+  // Quantos dos que serão processados estão completos (contagem/estoque).
+  const eligible = toProcess.filter((r) => missingOf(r).length === 0).length;
 
   if (countOnly) {
-    return NextResponse.json({ eligible, total: materialRequests.length });
+    return NextResponse.json({ eligible, total: toProcess.length });
   }
 
   // Verificar estoque antes de processar (se deductStock solicitado)
@@ -105,7 +134,7 @@ export async function POST(request: NextRequest) {
   let incomplete = 0;
   let stockDeducted = 0;
 
-  for (const materialRequest of materialRequests) {
+  for (const materialRequest of toProcess) {
     try {
       const missingFields = validateLabelInput({
         recipientName: materialRequest.recipientName,
