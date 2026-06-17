@@ -36,7 +36,7 @@ export function renderLabelZPL(input: LabelInput): string {
   const internalOrderNotes = up(input.internalOrderNotes);
   const complement = up(input.complement);
 
-  const X = 30; // margem esquerda (dots) — afasta da borda p/ não cortar
+  const X = 60; // margem esquerda (dots) — afasta da borda p/ não cortar na esquerda
 
   const cmds: string[] = [
     "^XA",      // início
@@ -76,8 +76,8 @@ export function renderLabelZPL(input: LabelInput): string {
   // 6. TELEFONE
   addLine(`TEL: ${recipientPhone}`, 28, 28);
 
-  // 7. REGIÃO — destaque
-  addLine(`REGIAO: ${internalOrderNotes}`, 32, 32);
+  // 7. REGIÃO — discreto (menor que o corpo)
+  addLine(`REGIAO: ${internalOrderNotes}`, 22, 22);
 
   cmds.push(
     "^PQ1,0,1,Y", // 1 cópia
