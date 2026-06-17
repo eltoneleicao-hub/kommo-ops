@@ -412,65 +412,191 @@ define(['jquery'], function ($) {
       $modal.css('display', 'flex');
     }
 
-    // Busca os candidatos (modo lista) e abre o seletor. region = null => todos.
+    // ID do contato principal de um lead vindo do Kommo (_embedded.contacts).
+    function mainContactId(l) {
+      try {
+        var cs = l._embedded && l._embedded.contacts;
+        if (cs && cs.length) {
+          for (var i = 0; i < cs.length; i++) { if (cs[i].is_main) return String(cs[i].id); }
+          return String(cs[0].id);
+        }
+      } catch (e) {}
+      return '';
+    }
+
+    // Busca nome+telefone de vários contatos do Kommo de uma vez (chunks de 250).
+    function fetchContactsByIds(ids, onDone) {
+      var map = {};
+      var unique = [], seen = {};
+      ids.forEach(function (id) { if (id && !seen[id]) { seen[id] = 1; unique.push(String(id)); } });
+      if (!unique.length) { onDone(map); return; }
+      var CH = 100, idx = 0;
+      (function next() {
+        if (idx >= unique.length) { onDone(map); return; }
+        var chunk = unique.slice(idx, idx + CH); idx += chunk.length;
+        var qs = chunk.map(function (id) { return 'filter[id][]=' + encodeURIComponent(id); }).join('&');
+        setStatus('⏳ Lendo contatos... (' + Math.min(idx, unique.length) + '/' + unique.length + ')');
+        $.ajax({
+          url: '/api/v4/contacts?' + qs + '&limit=250',
+          method: 'GET',
+          dataType: 'json',
+          success: function (data) {
+            var contacts = (data && data._embedded && data._embedded.contacts) || [];
+            contacts.forEach(function (c) {
+              var cf = c.custom_fields_values || [];
+              var phone = '';
+              for (var i = 0; i < cf.length; i++) {
+                if (String(cf[i].field_code || '').toUpperCase() === 'PHONE') {
+                  phone = pickPhoneValue(cf[i].values);
+                  if (phone) break;
+                }
+              }
+              if (!phone) phone = extractField(cf, ['Tel. comercial', 'Telefone comercial', 'Telefone', 'Celular', 'Phone']);
+              map[String(c.id)] = { name: c.name ? String(c.name) : '', phone: phone };
+            });
+            next();
+          },
+          error: function () { next(); } // tolera falha de um chunk
+        });
+      })();
+    }
+
+    // Monta o payload de etiqueta de um lead do Kommo (campos do lead + contato).
+    function buildLeadRecord(l, pipelineId, stageId, contactMap) {
+      var fields = l.custom_fields_values || [];
+      var cid = mainContactId(l);
+      var contact = (cid && contactMap[cid]) || { name: '', phone: '' };
+      var rec = {
+        kommoLeadId: String(l.id),
+        kommoPipelineId: String(pipelineId),
+        kommoStageId: String(stageId),
+        recipientName: contact.name || l.name || '',
+        recipientPhone: contact.phone || extractField(fields, ['Telefone', 'Celular', 'Phone']),
+        street: extractField(fields, ['Rua/Avenida', 'Endereco', 'Endereço', 'Logradouro', 'Rua']),
+        number: extractField(fields, ['Numero', 'Número', 'N°', 'Nº', 'Num']),
+        neighborhood: extractField(fields, ['Bairro']),
+        postalCode: extractField(fields, ['CEP', 'Cep']),
+        city: extractField(fields, ['Cidade', 'Municipio', 'Município']),
+        complement: extractField(fields, ['Complemento', 'Compl']),
+        internalOrderNotes: extractField(fields, ['Região', 'Regiao']),
+        kommoUrl: 'https://' + self.system().subdomain + '.kommo.com/leads/detail/' + l.id
+      };
+      if (cid) rec.kommoContactId = cid;
+      return rec;
+    }
+
+    // Valida leads no backend em chunks (evita request gigante / timeout).
+    function validateLeadsInChunks(records, onDone) {
+      var CH = 200, idx = 0, all = [];
+      (function next() {
+        if (idx >= records.length) { onDone(all); return; }
+        var chunk = records.slice(idx, idx + CH); idx += chunk.length;
+        setStatus('⏳ Validando ' + Math.min(idx, records.length) + '/' + records.length + '...');
+        $.ajax({
+          url: apiBase() + '/api/kommo/requests-batch-direct',
+          method: 'POST',
+          contentType: 'application/json',
+          data: JSON.stringify({ secret: cfg().api_key, validateOnly: true, leads: chunk }),
+          success: function (data) { all = all.concat((data && data.leads) || []); next(); },
+          error: function (xhr) { batchError(xhr, 'Erro ao validar leads'); }
+        });
+      })();
+    }
+
+    // Lê os leads (e contatos) da etapa DIRETO do Kommo, filtra por região
+    // (campo Região), valida no backend e abre o seletor. region=null => todos.
     function fetchAndSelect(region) {
-      setStatus('⏳ Buscando leads' + (region ? ' da região ' + region : '') + '...');
+      setStatus('⏳ Lendo leads da etapa no Kommo...');
       getLead(function (err, lead) {
         if (err) { setStatus('<span style="color:#f44336">✗ ' + err.message + '</span>'); return; }
         if (!pipelineAllowed(lead.pipeline_id)) { pipelineBlocked(); return; }
-        var body = {
-          secret: cfg().api_key,
-          kommoPipelineId: String(lead.pipeline_id),
-          kommoStageId: String(lead.status_id),
-          list: true
-        };
-        if (region) body.region = region;
-        $.ajax({
-          url: apiBase() + '/api/kommo/requests-batch',
-          method: 'POST',
-          contentType: 'application/json',
-          data: JSON.stringify(body),
-          success: function (data) {
-            var leads = (data && data.leads) || [];
-            if (!leads.length) {
+
+        fetchAllLeadsInStage(lead.pipeline_id, lead.status_id, function (kommoLeads) {
+          if (!kommoLeads.length) {
+            setStatus('<span style="color:#999">Nenhum lead nesta etapa</span>');
+            return;
+          }
+
+          // 1. Telefones dos contatos (em lote).
+          fetchContactsByIds(kommoLeads.map(mainContactId), function (contactMap) {
+            // 2. Monta payloads e filtra pela região do lead (campo Região).
+            var wantRegion = region ? norm(region) : '';
+            var records = [];
+            var byId = {};
+            kommoLeads.forEach(function (l) {
+              var rec = buildLeadRecord(l, lead.pipeline_id, lead.status_id, contactMap);
+              if (!wantRegion || norm(rec.internalOrderNotes) === wantRegion) {
+                records.push(rec);
+                byId[rec.kommoLeadId] = rec;
+              }
+            });
+            if (!records.length) {
               setStatus('<span style="color:#999">Nenhum lead' + (region ? ' na região ' + region : '') + ' nesta etapa</span>');
               return;
             }
-            var title = region ? ('🗺️ Lote — ' + region) : '📦 Gerar Lote';
-            showLeadSelection(title, leads, function (ids) { doBatchSelected(region, ids, lead); });
-          },
-          error: function (xhr) { batchError(xhr, 'Erro ao buscar leads'); }
+
+            // 3. Valida (em chunks) e abre o seletor.
+            validateLeadsInChunks(records, function (validated) {
+              validated.forEach(function (ml) {
+                var rec = byId[String(ml.kommoLeadId)];
+                if (rec && rec.internalOrderNotes) ml.regiao = rec.internalOrderNotes; // região do campo
+              });
+              var title = region ? ('🗺️ Lote — ' + region) : '📦 Gerar Lote';
+              showLeadSelection(title, validated, function (ids) { doBatchSelected(ids, byId); });
+            });
+          });
+        }, function (xhr) {
+          setStatus('<span style="color:#f44336">✗ Erro ao ler leads do Kommo (HTTP ' + xhr.status + ')</span>');
         });
       });
     }
 
-    // Gera apenas os leads selecionados.
-    function doBatchSelected(region, ids, lead) {
-      setStatus('⏳ Gerando ' + ids.length + ' etiqueta(s)...');
-      var body = {
-        secret: cfg().api_key,
-        kommoPipelineId: String(lead.pipeline_id),
-        kommoStageId: String(lead.status_id),
-        kommoLeadIds: ids,
-        deductStock: true
-      };
-      if (region) body.region = region;
-      $.ajax({
-        url: apiBase() + '/api/kommo/requests-batch',
-        method: 'POST',
-        contentType: 'application/json',
-        data: JSON.stringify(body),
-        success: function (data) {
-          setStatus(
-            '<span style="color:#4CAF50;font-weight:bold">✓ ' + (region ? 'Lote ' + region : 'Lote') + ' processado!</span><br>' +
-            '<small>' + data.generated + ' etiqueta(s)</small>' +
-            (data.incomplete > 0 ? '<br><small style="color:#FF9800">' + data.incomplete + ' incompletos</small>' : '') +
-            (data.stockDeducted > 0 ? '<br><small>📦 ' + data.stockDeducted + ' convites deduzidos</small>' : '')
-          );
-          refreshStock();
-        },
-        error: function (xhr) { batchError(xhr, 'Erro ao gerar lote'); }
-      });
+    // Gera etiqueta dos leads selecionados, em chunks (seguro p/ timeout e estoque).
+    function doBatchSelected(ids, recordsById) {
+      var payloads = ids.map(function (id) { return recordsById[String(id)]; }).filter(Boolean);
+      if (!payloads.length) return;
+      var CH = 40, idx = 0, gen = 0, inc = 0, ded = 0;
+
+      function summary(prefix, extra) {
+        setStatus(
+          prefix +
+          '<br><small>' + gen + ' etiqueta(s)</small>' +
+          (inc > 0 ? '<br><small style="color:#FF9800">' + inc + ' incompletos</small>' : '') +
+          (ded > 0 ? '<br><small>📦 ' + ded + ' convites deduzidos</small>' : '') +
+          (extra || '')
+        );
+        refreshStock();
+      }
+
+      (function next() {
+        if (idx >= payloads.length) {
+          summary('<span style="color:#4CAF50;font-weight:bold">✓ Lote processado!</span>');
+          return;
+        }
+        var chunk = payloads.slice(idx, idx + CH); idx += chunk.length;
+        setStatus('⏳ Gerando ' + Math.min(idx, payloads.length) + '/' + payloads.length + '...');
+        $.ajax({
+          url: apiBase() + '/api/kommo/requests-batch-direct',
+          method: 'POST',
+          contentType: 'application/json',
+          data: JSON.stringify({ secret: cfg().api_key, deductStock: true, leads: chunk }),
+          success: function (data) {
+            gen += (data.generated || 0); inc += (data.incomplete || 0); ded += (data.stockDeducted || 0);
+            next();
+          },
+          error: function (xhr) {
+            var motivo;
+            try {
+              var d = JSON.parse(xhr.responseText);
+              motivo = d.error === 'insufficient_stock'
+                ? 'estoque acabou (disponível: ' + d.available + ')'
+                : (d.message || d.error || 'HTTP ' + xhr.status);
+            } catch (e) { motivo = 'HTTP ' + xhr.status; }
+            summary('<span style="color:#FF9800;font-weight:bold">⚠ Parou no meio do lote</span>',
+              '<br><small style="color:#f44336">' + motivo + '</small>');
+          }
+        });
+      })();
     }
 
     /* ── Definir Região ──────────────────────────────────────────────────── */
@@ -693,13 +819,20 @@ define(['jquery'], function ($) {
         var url = '/api/v4/leads'
           + '?filter[statuses][0][pipeline_id]=' + encodeURIComponent(pipelineId)
           + '&filter[statuses][0][status_id]=' + encodeURIComponent(statusId)
-          + '&limit=250&page=' + p;
+          + '&with=contacts&limit=250&page=' + p;
         $.ajax({
           url: url,
           method: 'GET',
           dataType: 'json',
           success: function (data) {
             var leads = (data && data._embedded && data._embedded.leads) || [];
+            if (p === 1 && leads.length) {
+              try {
+                var f0 = leads[0];
+                console.log('[GE] amostra do 1º lead — campos:', (f0.custom_fields_values || []).length,
+                  '| contatos:', ((f0._embedded && f0._embedded.contacts) || []).length);
+              } catch (e) {}
+            }
             all = all.concat(leads);
             setStatus('⏳ Lendo leads do Kommo... (' + all.length + ')');
             var hasNext = !!(data && data._links && data._links.next);
