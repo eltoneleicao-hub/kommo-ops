@@ -75,24 +75,6 @@ export async function POST(request: Request) {
       kommoPipelineId: payload.kommoPipelineId,
       kommoStageId: payload.kommoStageId,
     };
-    const existingMaterialRequest = await tx.materialRequest.findUnique({
-      where: { kommoLeadId_kommoPipelineId_kommoStageId: kommoKey },
-      include: { Label: true },
-    });
-
-    if (
-      existingMaterialRequest?.status === "impresso" ||
-      (missingFields.length === 0 && existingMaterialRequest?.Label)
-    ) {
-      return {
-        requestId: existingMaterialRequest.id,
-        status: existingMaterialRequest.status,
-        missingFields: existingMaterialRequest.missingFields,
-        labelId: existingMaterialRequest.Label?.id ?? null,
-        stockDeducted: false,
-      };
-    }
-
     const materialRequest = await tx.materialRequest.upsert({
       where: { kommoLeadId_kommoPipelineId_kommoStageId: kommoKey },
       create: {
@@ -146,12 +128,33 @@ export async function POST(request: Request) {
     });
 
     if (existingLabel) {
+      // Reimpressão: regenera o conteúdo e devolve a etiqueta para a fila
+      // (pendente) para o agente imprimir de novo. NÃO deduz estoque outra vez.
+      const relabel = await tx.label.update({
+        where: { id: existingLabel.id },
+        data: {
+          content: renderLabelText(labelInput),
+          printStatus: "pendente",
+          printedAt: null,
+          errorMessage: null,
+        },
+      });
+
+      const requeued =
+        materialRequest.status === "etiqueta_gerada"
+          ? materialRequest
+          : await tx.materialRequest.update({
+              where: { id: materialRequest.id },
+              data: { status: "etiqueta_gerada" },
+            });
+
       return {
-        requestId: materialRequest.id,
-        status: materialRequest.status,
-        missingFields: materialRequest.missingFields,
-        labelId: existingLabel.id,
+        requestId: requeued.id,
+        status: "etiqueta_gerada",
+        missingFields,
+        labelId: relabel.id,
         stockDeducted: false,
+        reprint: true,
       };
     }
 

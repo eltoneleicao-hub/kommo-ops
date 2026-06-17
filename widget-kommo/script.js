@@ -178,8 +178,28 @@ define(['jquery'], function ($) {
       });
     }
 
+    // Escolhe o telefone do campo PHONE (multivalor), priorizando "Tel. comercial"
+    // (enum WORK). Se não houver comercial, cai pro primeiro número preenchido.
+    function pickPhoneValue(values) {
+      if (!values || !values.length) return '';
+      var preferCode = ['WORK', 'WORKDD', 'COML'];
+      // 1ª passada: tipo comercial/trabalho
+      for (var i = 0; i < values.length; i++) {
+        var code = String(values[i].enum_code || '').toUpperCase();
+        var label = norm(values[i].enum || '');
+        var isComercial = preferCode.indexOf(code) >= 0 ||
+                          label.indexOf('comercial') >= 0 || label.indexOf('trabalho') >= 0;
+        if (isComercial && values[i].value) return String(values[i].value);
+      }
+      // 2ª passada: primeiro não-vazio
+      for (var j = 0; j < values.length; j++) {
+        if (values[j].value) return String(values[j].value);
+      }
+      return '';
+    }
+
     // Busca o telefone real no CONTATO (no Kommo o telefone fica no contato,
-    // não no lead — o campo "Telefone continua o mesmo" do lead é só um dropdown).
+    // não no lead). Prioriza o "Tel. comercial".
     function getContactPhone(contactId, callback) {
       if (!contactId) { callback(''); return; }
       $.ajax({
@@ -189,16 +209,17 @@ define(['jquery'], function ($) {
         success: function (c) {
           var cf = (c && c.custom_fields_values) || [];
           var phone = '';
-          // 1) telefone pelo field_code padrão do Kommo
+          // 1) campo PHONE (multivalor) — prioriza Tel. comercial
           for (var i = 0; i < cf.length; i++) {
             if (String(cf[i].field_code || '').toUpperCase() === 'PHONE') {
-              phone = fieldValue(cf[i]);
+              try { console.log('[GE] telefones do contato:', JSON.stringify(cf[i].values)); } catch (e) {}
+              phone = pickPhoneValue(cf[i].values);
               if (phone) break;
             }
           }
-          // 2) fallback por nome
-          if (!phone) phone = extractField(cf, ['Telefone', 'Celular', 'Phone', 'Whatsapp', 'WhatsApp']);
-          console.log('[GE] telefone do contato', contactId, '=', phone);
+          // 2) fallback por nome de campo custom
+          if (!phone) phone = extractField(cf, ['Tel. comercial', 'Telefone comercial', 'Telefone', 'Celular', 'Phone']);
+          console.log('[GE] telefone (comercial) =', phone);
           callback(phone);
         },
         error: function (xhr) {
@@ -264,7 +285,8 @@ define(['jquery'], function ($) {
             success: function (data) {
               if (data.status === 'etiqueta_gerada') {
                 setStatus(
-                  '<span style="color:#4CAF50;font-weight:bold">✓ Etiqueta gerada!</span>' +
+                  '<span style="color:#4CAF50;font-weight:bold">✓ ' +
+                  (data.reprint ? 'Reimpressão enviada!' : 'Etiqueta gerada!') + '</span>' +
                   (data.stockDeducted ? '<br><small>📦 1 convite deduzido do estoque</small>' : '')
                 );
               } else if (data.status === 'campos_incompletos') {
@@ -276,9 +298,12 @@ define(['jquery'], function ($) {
               refreshStock();
             },
             error: function (xhr) {
+              console.log('[GE] erro requests status=', xhr.status, 'resp=', xhr.responseText);
               var msg = 'Erro ao gerar etiqueta';
-              try { msg = JSON.parse(xhr.responseText).message || msg; } catch (e) {}
-              setStatus('<span style="color:#f44336">✗ ' + msg + '</span>');
+              try { var d = JSON.parse(xhr.responseText); msg = d.message || d.error || msg; } catch (e) {}
+              var dica = xhr.status === 401 ? ' — confira o api_key (secret)' :
+                         xhr.status === 0 ? ' — CORS/conexão (verifique api_url)' : '';
+              setStatus('<span style="color:#f44336">✗ ' + msg + ' (HTTP ' + xhr.status + ')' + dica + '</span>');
             }
           });
         });
