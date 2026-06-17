@@ -40,6 +40,7 @@ export function renderLabelZPL(input: LabelInput): string {
 
   const cmds: string[] = [
     "^XA",      // início
+    "^CI28",    // encoding UTF-8 (renderiza acentos: SÃO JOSÉ, REGIÃO, etc.)
     "^MMT,Y",   // tear off
     "^MNY",     // auto-detect gaps
     "^PON",     // orientação normal
