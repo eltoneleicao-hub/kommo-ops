@@ -108,10 +108,30 @@ define(['jquery'], function ($) {
       var $modal = $('#ge-modal');
       $modal.find('#ge-modal-title').html(title);
       $modal.find('#ge-modal-body').html(body);
-      $modal.find('#ge-modal-confirm').off('click').on('click', function () {
+      $modal.find('#ge-modal-confirm').show().off('click').on('click', function () {
         $modal.css('display', 'none');
         onConfirm();
       });
+      $modal.css('display', 'flex');
+    }
+
+    var REGIOES = ['Centro', 'Norte', 'Sul', 'Leste', 'Oeste', 'Sudeste'];
+
+    // Seletor de região (1ª etapa da dupla confirmação). A escolha em si não
+    // dispara o lote — leva à contagem + modal de confirmação.
+    function showRegionPicker() {
+      var $modal = $('#ge-modal');
+      $modal.find('#ge-modal-title').html('🗺️ Lote por Região');
+      var btns = REGIOES.map(function (r) {
+        return '<button class="ge-region-opt" data-region="' + r + '" ' +
+          'style="padding:10px 4px;background:#673AB7;color:#fff;border:none;border-radius:5px;' +
+          'font-size:12px;font-weight:700;cursor:pointer">' + r + '</button>';
+      }).join('');
+      $modal.find('#ge-modal-body').html(
+        '<div style="font-size:12px;color:#666;margin-bottom:10px">Escolha a região para gerar o lote desta etapa do funil:</div>' +
+        '<div style="display:grid;grid-template-columns:1fr 1fr;gap:6px">' + btns + '</div>'
+      );
+      $modal.find('#ge-modal-confirm').hide(); // a escolha da região é a ação
       $modal.css('display', 'flex');
     }
 
@@ -362,6 +382,84 @@ define(['jquery'], function ($) {
       });
     }
 
+    /* ── Lote por Região ─────────────────────────────────────────────────── */
+
+    // Erro padrão de chamadas de lote (trata estoque insuficiente).
+    function batchError(xhr, fallback) {
+      var msg = fallback;
+      try {
+        var d = JSON.parse(xhr.responseText);
+        if (d.error === 'insufficient_stock') {
+          msg = 'Estoque insuficiente — disponível: ' + d.available + ', necessário: ' + d.needed;
+        } else { msg = d.message || d.error || msg; }
+      } catch (e) {}
+      setStatus('<span style="color:#f44336">✗ ' + msg + '</span>');
+    }
+
+    // 2ª etapa: conta os leads da região nesta etapa e pede confirmação.
+    function startRegionBatch(region) {
+      setStatus('⏳ Contando leads da região ' + region + '...');
+      getLead(function (err, lead) {
+        if (err) { setStatus('<span style="color:#f44336">✗ ' + err.message + '</span>'); return; }
+        $.ajax({
+          url: apiBase() + '/api/kommo/requests-batch',
+          method: 'POST',
+          contentType: 'application/json',
+          data: JSON.stringify({
+            secret: cfg().api_key,
+            kommoPipelineId: String(lead.pipeline_id),
+            kommoStageId: String(lead.status_id),
+            region: region,
+            countOnly: true
+          }),
+          success: function (data) {
+            var n = data.eligible || 0;
+            if (n === 0) {
+              setStatus('<span style="color:#999">Nenhum lead elegível na região ' + region + ' nesta etapa</span>');
+              return;
+            }
+            showModal(
+              '🗺️ Lote — ' + region,
+              'Encontrados <strong>' + n + '</strong> lead(s) na região <strong>' + region + '</strong> desta etapa.<br><br>' +
+              'Gerar/reimprimir as etiquetas em lote?',
+              function () { doRegionBatch(region); }
+            );
+          },
+          error: function (xhr) { batchError(xhr, 'Erro ao contar leads da região'); }
+        });
+      });
+    }
+
+    // 3ª etapa: gera o lote da região.
+    function doRegionBatch(region) {
+      setStatus('⏳ Gerando lote da região ' + region + '...');
+      getLead(function (err, lead) {
+        if (err) { setStatus('<span style="color:#f44336">✗ ' + err.message + '</span>'); return; }
+        $.ajax({
+          url: apiBase() + '/api/kommo/requests-batch',
+          method: 'POST',
+          contentType: 'application/json',
+          data: JSON.stringify({
+            secret: cfg().api_key,
+            kommoPipelineId: String(lead.pipeline_id),
+            kommoStageId: String(lead.status_id),
+            region: region,
+            deductStock: true
+          }),
+          success: function (data) {
+            setStatus(
+              '<span style="color:#4CAF50;font-weight:bold">✓ Lote ' + region + ' processado!</span><br>' +
+              '<small>' + data.generated + ' etiquetas</small>' +
+              (data.incomplete > 0 ? '<br><small style="color:#FF9800">' + data.incomplete + ' incompletos</small>' : '') +
+              (data.stockDeducted > 0 ? '<br><small>📦 ' + data.stockDeducted + ' convites deduzidos</small>' : '')
+            );
+            refreshStock();
+          },
+          error: function (xhr) { batchError(xhr, 'Erro ao gerar lote da região'); }
+        });
+      });
+    }
+
     /* ── Definir Região ──────────────────────────────────────────────────── */
 
     // Descobre o field_id do campo "Região" lendo a definição de custom fields
@@ -496,6 +594,7 @@ define(['jquery'], function ($) {
                 '<button id="ge-btn-batch" style="flex:1;padding:8px 4px;background:#FF9800;color:#fff;border:none;border-radius:5px;font-size:11px;font-weight:700;cursor:pointer">📦 Gerar Lote</button>' +
               '</div>' +
               '<button id="ge-btn-region" style="width:100%;margin-top:6px;padding:8px 4px;background:#673AB7;color:#fff;border:none;border-radius:5px;font-size:11px;font-weight:700;cursor:pointer">📍 Definir Região</button>' +
+              '<button id="ge-btn-region-batch" style="width:100%;margin-top:6px;padding:8px 4px;background:#009688;color:#fff;border:none;border-radius:5px;font-size:11px;font-weight:700;cursor:pointer">🗺️ Lote por Região</button>' +
               '<div id="ge-status" style="margin-top:6px;font-size:11px;min-height:14px;line-height:1.4"></div>' +
             '</div>'
         });
@@ -551,6 +650,14 @@ define(['jquery'], function ($) {
               'Resolver a região pelo bairro/CEP deste lead e gravar no campo "Região"?',
               doSetRegion
             );
+          })
+          .on('click.ge', '#ge-btn-region-batch', function () {
+            showRegionPicker();
+          })
+          .on('click.ge', '.ge-region-opt', function () {
+            var region = String($(this).attr('data-region'));
+            $('#ge-modal').css('display', 'none');
+            startRegionBatch(region);
           })
           .on('click.ge', '#ge-modal-cancel', function () {
             $('#ge-modal').css('display', 'none');

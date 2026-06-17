@@ -3,6 +3,7 @@ import { z } from "zod";
 import { prisma } from "@/lib/prisma";
 import { renderLabelText, validateLabelInput } from "@/domain/labels";
 import { getRequestStatusForMissingFields } from "@/domain/requests";
+import { resolveRegion } from "@/domain/region-resolver";
 
 const batchPayloadSchema = z.object({
   secret: z.string().min(1),
@@ -10,6 +11,8 @@ const batchPayloadSchema = z.object({
   kommoStageId: z.string().min(1),
   countOnly: z.boolean().optional().default(false),
   deductStock: z.boolean().optional().default(false),
+  // Filtra o lote por região (resolvida do bairro/CEP). Omitido = todas.
+  region: z.string().optional(),
 });
 
 export async function POST(request: NextRequest) {
@@ -22,9 +25,9 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
 
-  const { kommoPipelineId, kommoStageId, countOnly, deductStock } = parsed.data;
+  const { kommoPipelineId, kommoStageId, countOnly, deductStock, region } = parsed.data;
 
-  const materialRequests = await prisma.materialRequest.findMany({
+  const allRequests = await prisma.materialRequest.findMany({
     where: {
       kommoPipelineId,
       kommoStageId,
@@ -32,6 +35,11 @@ export async function POST(request: NextRequest) {
     },
     orderBy: { createdAt: "asc" },
   });
+
+  // Filtra por região (resolvida do bairro/CEP) quando informada.
+  const materialRequests = region
+    ? allRequests.filter((r) => resolveRegion(r.neighborhood, r.postalCode).regiao === region)
+    : allRequests;
 
   // Modo contagem: apenas informa quantos leads são elegíveis
   const eligible = materialRequests.filter((r) => {
@@ -124,7 +132,19 @@ export async function POST(request: NextRequest) {
           const existingLabel = await tx.label.findUnique({
             where: { requestId: materialRequest.id },
           });
-          if (existingLabel) return existingLabel;
+          if (existingLabel) {
+            // Reimpressão em lote: regenera conteúdo e devolve à fila (pendente),
+            // sem deduzir estoque de novo.
+            return tx.label.update({
+              where: { id: existingLabel.id },
+              data: {
+                content: labelContent,
+                printStatus: "pendente",
+                printedAt: null,
+                errorMessage: null,
+              },
+            });
+          }
 
           const newLabel = await tx.label.create({
             data: {
