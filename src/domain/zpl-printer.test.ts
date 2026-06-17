@@ -51,3 +51,40 @@ describe("renderLabelZPL — nome longo", () => {
     expect(zpl).toContain("^FDSANTOS MOURA^FS");
   });
 });
+
+describe("renderLabelZPL — campos longos quebram (não só o nome)", () => {
+  it("rua/bairro longos quebram em 2 linhas em vez de cortar na borda", () => {
+    const zpl = renderLabelZPL({
+      recipientName: "Joao",
+      street: "Avenida Doutor Joao Guilhermino dos Santos Pereira Filho",
+      number: "1234",
+      neighborhood: "Jardim Sao Dimas Residencial das Palmeiras Imperiais",
+      postalCode: "12245000",
+      city: "Sao Jose dos Campos",
+      internalOrderNotes: "Centro",
+      recipientPhone: "12999990000",
+    });
+    // cada ^FD deve caber no limite da fonte 28 (~37 chars), provando a quebra
+    const fds = [...zpl.matchAll(/\^FD(.*?)\^FS/g)].map((m) => m[1]);
+    fds.forEach((t) => expect(t.length).toBeLessThanOrEqual(40));
+    // rua quebrou: a 2ª parte aparece numa linha própria
+    expect(fds.some((t) => t.includes("AVENIDA DOUTOR JOAO"))).toBe(true);
+  });
+
+  it("translitera acentos/mojibake para ASCII na etiqueta inteira", () => {
+    const zpl = renderLabelZPL({
+      recipientName: "Lindóia Conceição", // acentos corretos
+      street: "Rua São João",
+      number: "10",
+      neighborhood: "Jardim Aquário",
+      postalCode: "12200000",
+      city: "SÃ£o JosÃ©", // mojibake
+      internalOrderNotes: "Sudeste",
+      recipientPhone: "12999990000",
+    });
+    const body = zpl.replace(/\^CI28/g, ""); // ^CI28 é o único token; resto deve ser ASCII
+    expect([...body].every((c) => c.charCodeAt(0) <= 0x7f)).toBe(true);
+    expect(zpl).toContain("LINDOIA CONCEICAO");
+    expect(zpl).toContain("SAO JOSE");
+  });
+});

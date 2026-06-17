@@ -89,18 +89,27 @@ export function renderLabelZPL(input: LabelInput): string {
   // calcular a altura total e CENTRALIZAR o bloco verticalmente.
   type Line = { text: string; h: number; gap: number };
   const lines: Line[] = [];
-  // Destinatário (destaque) — quebra em até 2 linhas se for longo, p/ não cortar.
-  const nameLines = wrapName(recipientName, 26, 2);
-  nameLines.forEach((ln, i) => {
-    const isLast = i === nameLines.length - 1;
-    lines.push({ text: ln, h: 40, gap: isLast ? 12 : 4 }); // linhas do nome coladas (gap 4)
-  });
-  lines.push({ text: `${street}, ${number}`, h: 28, gap: 8 });
-  if (complement) lines.push({ text: complement, h: 26, gap: 8 });
-  lines.push({ text: neighborhood, h: 28, gap: 8 });
-  lines.push({ text: `${city} - ${postalCode}`, h: 28, gap: 8 });
-  lines.push({ text: `TEL: ${recipientPhone}`, h: 28, gap: 8 });
-  lines.push({ text: `REGIAO: ${internalOrderNotes}`, h: 22, gap: 0 }); // discreto
+
+  // Largura útil ≈ 702 dots (PW832 − X − margem direita). O nome calibrou em
+  // 26 chars @ fonte 40 (~27 dots/char); o limite escala inversamente c/ a fonte.
+  const AVAIL = 702;
+  const maxChars = (h: number) => Math.max(8, Math.floor(AVAIL / (h * 0.675)));
+
+  // Empurra um campo aplicando a MESMA regra de quebra do nome a TODOS: parte em
+  // até `maxLines` linhas (coladas, gap 4) e dá o respiro `gap` só após a última.
+  const pushField = (text: string, h: number, gap: number, maxLines = 2) => {
+    wrapName(text, maxChars(h), maxLines).forEach((ln, i, arr) => {
+      lines.push({ text: ln, h, gap: i === arr.length - 1 ? gap : 4 });
+    });
+  };
+
+  pushField(recipientName, 40, 12);              // destinatário (destaque)
+  pushField(`${street}, ${number}`, 28, 8);
+  if (complement) pushField(complement, 26, 8);
+  pushField(neighborhood, 28, 8);
+  pushField(`${city} - ${postalCode}`, 28, 8);
+  pushField(`TEL: ${recipientPhone}`, 28, 8, 1); // telefone: 1 linha (não quebra)
+  pushField(`REGIAO: ${internalOrderNotes}`, 22, 0);
 
   const totalH = lines.reduce((sum, l) => sum + l.h + l.gap, 0);
   // Y inicial centraliza o bloco; nunca sobe acima de 12 dots.
