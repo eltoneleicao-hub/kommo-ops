@@ -888,6 +888,70 @@ define(['jquery'], function ($) {
       downloadCsv('leads-sem-regiao.csv', header, rows);
     }
 
+    /* ── Relatório do lote (feito × falta) ───────────────────────────────────
+     * Cruza TODOS os leads da etapa (Kommo) com o status de etiqueta no banco.
+     * Cobre o que falta — inclusive leads que nunca geraram etiqueta (não estão
+     * no banco; aqui aparecem como "Não gerada").
+     */
+    var _lastReport = null;
+    function doStageReport() {
+      setStatus('⏳ Lendo leads da etapa no Kommo...');
+      getLead(function (err, lead) {
+        if (err) { setStatus('<span style="color:#f44336">✗ ' + err.message + '</span>'); return; }
+        if (!pipelineAllowed(lead.pipeline_id)) { pipelineBlocked(); return; }
+        fetchAllLeadsInStage(lead.pipeline_id, lead.status_id, function (kommoLeads) {
+          if (!kommoLeads.length) { setStatus('<span style="color:#999">Nenhum lead nesta etapa</span>'); return; }
+          var meta = kommoLeads.map(function (l) {
+            var fields = l.custom_fields_values || [];
+            return { id: String(l.id), name: l.name || ('Lead ' + l.id), regiao: extractField(fields, ['Região', 'Regiao']) || '' };
+          });
+          var ids = meta.map(function (m) { return m.id; });
+          setStatus('⏳ Consultando status de ' + ids.length + ' leads...');
+          $.ajax({
+            url: apiBase() + '/api/labels/status-by-leads',
+            method: 'POST', contentType: 'application/json',
+            data: JSON.stringify({ secret: cfg().api_key, kommoLeadIds: ids }),
+            success: function (data) { renderStageReport(meta, (data && data.statuses) || {}); },
+            error: function (xhr) { setStatus('<span style="color:#f44336">✗ Erro ao consultar status (HTTP ' + xhr.status + ')</span>'); }
+          });
+        }, function (xhr) {
+          setStatus('<span style="color:#f44336">✗ Erro ao ler leads do Kommo (HTTP ' + xhr.status + ')</span>');
+        });
+      });
+    }
+
+    function renderStageReport(meta, statuses) {
+      var sub = ''; try { sub = self.system().subdomain; } catch (e) {}
+      var LABELS = { impresso: 'Impresso', pendente: 'Pendente (na fila)', processando: 'Processando', erro: 'Erro', sem_etiqueta: 'Sem etiqueta (campos faltando)' };
+      var counts = { impresso: 0, pendente: 0, processando: 0, erro: 0, sem_etiqueta: 0, nao_gerada: 0 };
+      var rows = meta.map(function (m) {
+        var s = statuses[m.id], status, detalhe = '';
+        if (!s) { status = 'nao_gerada'; detalhe = m.regiao ? 'nunca gerou etiqueta' : 'sem região'; }
+        else {
+          status = s.status;
+          if (status === 'erro') detalhe = s.errorMessage || '';
+          else if (status === 'sem_etiqueta') detalhe = (s.missingFields || []).join(', ');
+        }
+        counts[status] = (counts[status] || 0) + 1;
+        var statusTxt = status === 'nao_gerada' ? 'Não gerada' : (LABELS[status] || status);
+        var dataImp = (s && s.printedAt) ? String(s.printedAt).slice(0, 10) : '';
+        var regiao = (s && s.regiao) || m.regiao || '';
+        var link = sub ? ('https://' + sub + '.kommo.com/leads/detail/' + m.id) : '';
+        return [m.id, m.name || '', regiao, statusTxt, detalhe, dataImp, link];
+      });
+      _lastReport = { header: ['Lead ID', 'Nome', 'Região', 'Status', 'Detalhe', 'Data impressão', 'Link Kommo'], rows: rows };
+      var faltam = meta.length - counts.impresso;
+      setStatus(
+        '<span style="color:#4CAF50;font-weight:bold">✓ ' + counts.impresso + ' impresso(s)</span>' +
+        '<br><span style="color:#FF9800;font-weight:bold">⚠ ' + faltam + ' faltando</span> de ' + meta.length + ' ' +
+        '<button id="ge-csv-report" style="padding:2px 8px;background:#546E7A;color:#fff;border:none;border-radius:4px;font-size:11px;font-weight:700;cursor:pointer">⬇️ CSV</button>' +
+        '<ul style="margin:4px 0 0 16px;padding:0;font-size:11px">' +
+        '<li>Pendente: ' + counts.pendente + ' · Processando: ' + counts.processando + '</li>' +
+        '<li>Erro: ' + counts.erro + ' · Sem etiqueta: ' + counts.sem_etiqueta + ' · Não gerada: ' + counts.nao_gerada + '</li>' +
+        '</ul>'
+      );
+    }
+
     function renderRegionBatchSummary(ok, fail, manual, skipped) {
       _lastManual = manual || [];
       var html = '<span style="color:#4CAF50;font-weight:bold">✓ ' + ok +
@@ -1098,6 +1162,7 @@ define(['jquery'], function ($) {
               '<button id="ge-btn-region" style="width:100%;margin-top:6px;padding:8px 4px;background:#673AB7;color:#fff;border:none;border-radius:5px;font-size:11px;font-weight:700;cursor:pointer">📍 Definir Região</button>' +
               '<button id="ge-btn-setregion-batch" style="width:100%;margin-top:6px;padding:8px 4px;background:#3F51B5;color:#fff;border:none;border-radius:5px;font-size:11px;font-weight:700;cursor:pointer">🧭 Definir Região (Lote)</button>' +
               '<button id="ge-btn-region-batch" style="width:100%;margin-top:6px;padding:8px 4px;background:#009688;color:#fff;border:none;border-radius:5px;font-size:11px;font-weight:700;cursor:pointer">🗺️ Lote por Região</button>' +
+              '<button id="ge-btn-report" style="width:100%;margin-top:6px;padding:8px 4px;background:#546E7A;color:#fff;border:none;border-radius:5px;font-size:11px;font-weight:700;cursor:pointer">📋 Relatório do Lote</button>' +
               '<div id="ge-status" style="margin-top:6px;font-size:11px;min-height:14px;line-height:1.4"></div>' +
             '</div>'
         });
@@ -1160,6 +1225,12 @@ define(['jquery'], function ($) {
           })
           .on('click.ge', '#ge-csv-manual', function () {
             exportManualCsv();
+          })
+          .on('click.ge', '#ge-btn-report', function () {
+            doStageReport();
+          })
+          .on('click.ge', '#ge-csv-report', function () {
+            if (_lastReport) downloadCsv('relatorio-lote.csv', _lastReport.header, _lastReport.rows);
           })
           .on('click.ge', '#ge-btn-region-batch', function () {
             showRegionPicker();
