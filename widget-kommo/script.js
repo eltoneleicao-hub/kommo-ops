@@ -141,6 +141,19 @@ define(['jquery'], function ($) {
 
     var REGIOES = ['Centro', 'Norte', 'Sul', 'Leste', 'Oeste', 'Sudeste'];
 
+    // Núcleo da região a partir do valor do campo (tolera nomes do dropdown como
+    // "Região Sul" vs "Sul"): devolve uma das 6 regiões em forma normalizada, ou
+    // o próprio valor normalizado se nenhuma casar. Usado pra comparar com robustez.
+    function regionCore(value) {
+      var n = norm(value);
+      if (!n) return '';
+      for (var i = 0; i < REGIOES.length; i++) {
+        var rn = norm(REGIOES[i]);
+        if (n === rn || n.indexOf(rn) >= 0) return rn;
+      }
+      return n;
+    }
+
     // Seletor de região (1ª etapa da dupla confirmação). A escolha em si não
     // dispara o lote — leva à contagem + modal de confirmação.
     function showRegionPicker() {
@@ -577,7 +590,8 @@ define(['jquery'], function ($) {
             var byId = {};
             kommoLeads.forEach(function (l) {
               var rec = buildLeadRecord(l, lead.pipeline_id, lead.status_id, contactMap);
-              if (!wantRegion || norm(rec.internalOrderNotes) === wantRegion) {
+              // compara por NÚCLEO da região (tolera "Região Sul" no campo vs "Sul")
+              if (!wantRegion || regionCore(rec.internalOrderNotes) === wantRegion) {
                 records.push(rec);
                 byId[rec.kommoLeadId] = rec;
               }

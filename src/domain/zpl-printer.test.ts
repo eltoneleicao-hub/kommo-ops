@@ -87,4 +87,14 @@ describe("renderLabelZPL — campos longos quebram (não só o nome)", () => {
     expect(zpl).toContain("LINDOIA CONCEICAO");
     expect(zpl).toContain("SAO JOSE");
   });
+
+  it("não duplica 'REGIAO' quando o campo já vem como 'Região Sul'", () => {
+    const zpl = renderLabelZPL({
+      recipientName: "Fulano", street: "Rua A", number: "1",
+      neighborhood: "Centro", postalCode: "12200000", city: "SJC",
+      internalOrderNotes: "Região Sul", recipientPhone: "",
+    });
+    expect(zpl).toContain("^FDREGIAO: SUL^FS");
+    expect(zpl).not.toContain("REGIAO: REGIAO");
+  });
 });

@@ -107,7 +107,8 @@ export function renderLabelZPL(input: LabelInput): string {
   if (complement) pushField(complement, 26, 8);
   pushField(neighborhood, 28, 8);
   pushField(`${city} - ${postalCode}`, 28, 8);
-  pushField(`REGIAO: ${internalOrderNotes}`, 22, 0);
+  // tira o prefixo "REGIAO " redundante (campo do Kommo às vezes é "Região Sul")
+  pushField(`REGIAO: ${internalOrderNotes.replace(/^REGIAO\s+/, "")}`, 22, 0);
 
   const totalH = lines.reduce((sum, l) => sum + l.h + l.gap, 0);
   // Y inicial centraliza o bloco; nunca sobe acima de 12 dots.

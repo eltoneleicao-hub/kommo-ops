@@ -85,7 +85,7 @@ export function renderLabelText(input: LabelInput): string {
     clean(normalized.neighborhood),
     `${clean(normalized.city)} - CEP ${clean(normalized.postalCode)}`,
     "",
-    `REGIAO: ${clean(normalized.internalOrderNotes)}`,
+    `REGIAO: ${clean(normalized.internalOrderNotes).replace(/^[Rr]egi[ãa]o\s+/, "")}`,
   );
 
   return lines.join("\n");
