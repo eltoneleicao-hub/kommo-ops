@@ -14,7 +14,7 @@
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
 import { z } from "zod";
-import { resolveRegion } from "@/domain/region-resolver";
+import { resolveRegion, resolveRegionFromText } from "@/domain/region-resolver";
 import { normalizeAddressInput } from "@/domain/labels";
 import { withCors, corsPreflight } from "@/lib/cors";
 
@@ -64,12 +64,12 @@ export async function POST(request: NextRequest) {
 
     let resolved = resolveRegion(bairro, cep);
 
-    // Fallback p/ endereço em texto livre (sem "Bairro:" rotulado): varre o bloco
-    // cru procurando um bairro conhecido (detecção embutida do resolver). Só roda
-    // quando o passo acima NÃO resolveu — assim o caso Origem/Destino (que já
-    // extraiu o Destino) não cai aqui e não corre risco de pegar a Origem.
+    // Fallback p/ endereço em texto livre (sem "Bairro:" rotulado): segmenta o
+    // bloco e resolve cada pedaço, com trava de cidade (não roteia fora de SJC).
+    // Só roda quando o passo acima NÃO resolveu — assim o caso Origem/Destino (que
+    // já extraiu o Destino) não cai aqui e não corre risco de pegar a Origem.
     if (!resolved.regiao && it.endereco?.trim()) {
-      resolved = resolveRegion(it.endereco, cep);
+      resolved = resolveRegionFromText(it.endereco, cep);
     }
 
     return {

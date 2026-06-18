@@ -1,5 +1,31 @@
 import { describe, it, expect } from "vitest";
-import { resolveRegion, normalizeBairro } from "./region-resolver";
+import { resolveRegion, resolveRegionFromText, normalizeBairro } from "./region-resolver";
+
+describe("resolveRegionFromText — endereço livre (campo Rua/Avenida)", () => {
+  it("resolve bairro de SJC mesmo grudado com CEP/cidade", () => {
+    expect(resolveRegionFromText("Rua icatu 330 | CEP 12235649 | Pq industrial | São José dos Campos").regiao).toBe("Sul");
+    expect(resolveRegionFromText("Rua José Lopes 268 | 12244885 | Urbanova | SJC").regiao).toBe("Oeste");
+    expect(resolveRegionFromText("Rua Edward Simões 403 | 12220530 | Vila Industrial | São José dos Campos").regiao).toBe("Leste");
+    expect(resolveRegionFromText("Rua Manoel Meneses Leal. 416, Galo Branco SJCAMPOS").regiao).toBe("Leste");
+  });
+
+  it("SEGURANÇA: endereço de outra cidade NUNCA vira região de SJC", () => {
+    const foraDeSJC = [
+      "Rua/Av: X | Bairro: JARDIM GARCEZ | Cidade: TAUBATÉ",
+      "Bairro Maria Elmira,Caçapava ,SP | Cep 12285020",
+      "Rua Dom José 1 n 78 | 12310-047 | Pq dos Príncipes | Jacareí - SP",
+      "Rua Raul Pompéia 1100 apto 101, cep 05025-011, São Paulo",
+      "Av Corinthians 531 casa CEP 11689-410 bairro estufa 2 Ubatuba SP",
+      "Rua Sebastião Vitalino 83 | Parque Califórnia | Jacareí/Sp | 12.311230",
+    ];
+    foraDeSJC.forEach((e) => expect(resolveRegionFromText(e).regiao).toBeNull());
+  });
+
+  it("texto vazio / sem bairro → null", () => {
+    expect(resolveRegionFromText("").regiao).toBeNull();
+    expect(resolveRegionFromText("estrada municipal numero 40").regiao).toBeNull();
+  });
+});
 
 describe("normalizeBairro", () => {
   it("remove acento, caixa e pontuação", () => {

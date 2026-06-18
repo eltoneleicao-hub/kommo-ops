@@ -31,7 +31,7 @@ export interface RegionResult {
   /** Como foi resolvido. "fuzzy" = casou por aproximação (typo/abreviação).
    *  "alias" = casou na tabela curada de variantes verificadas (prefixo omitido,
    *  abreviação, ou bairro real fora da lista oficial de 6 regiões). */
-  method: "bairro" | "alias" | "fuzzy" | "cep" | "ambiguo-cep" | "indefinida";
+  method: "bairro" | "alias" | "fuzzy" | "cep" | "ambiguo-cep" | "indefinida" | "texto" | "fora-sjc";
   /** Texto do bairro normalizado usado na busca (debug). */
   matchedBairro?: string;
 }
@@ -55,7 +55,7 @@ export function normalizeBairro(value: string | null | undefined): string {
 const ABBREV: Record<string, string> = {
   jd: "jardim", jrd: "jardim", jdm: "jardim", jardin: "jardim",
   vl: "vila", villa: "vila",
-  pq: "parque",
+  pq: "parque", bq: "bosque", bsq: "bosque",
   res: "residencial", resid: "residencial",
   cj: "conjunto", conj: "conjunto",
   hab: "habitacional",
@@ -588,4 +588,73 @@ export function resolveRegion(
 
   // 3. Nada resolve
   return { regiao: null, confidence: "baixa", method: "indefinida", matchedBairro: norm || undefined };
+}
+
+/* ── Resolução a partir de ENDEREÇO em TEXTO LIVRE ────────────────────────────
+ * Para leads cujo endereço inteiro está num campo só (Rua/Avenida), em formatos
+ * variados. Segmenta o texto e roda o resolver completo em cada pedaço plausível
+ * de bairro, com travas de segurança p/ NÃO rotear entrega errado:
+ *   - se o texto declara OUTRA cidade (Jacareí, Caçapava...) e não SJC → null;
+ *   - pula segmentos de rua/número/CEP/cidade;
+ *   - só aceita match direto de bairro/alias (não fuzzy/núcleo) por segmento;
+ *   - exige UMA única região entre os segmentos (conflito → null).
+ */
+const NON_SJC_CITIES =
+  /\b(jacarei|cacapava|taubate|pindamonhangaba|pinda|ubatuba|caraguatatuba|caragua|guaratingueta|sorocaba|sao paulo|mogi das cruzes|mogi|taquaritinga|jambeiro|monteiro lobato|igarata|santa branca|paraibuna|lorena|aparecida|cruzeiro|campos do jordao|jacarehy)\b/;
+const SJC_MARK =
+  /\b(sao jose dos campos|s jose dos campos|sao jose dos|sjcampos|sjc|s j campos|sjcampos)\b/;
+const STREET_SEG =
+  /^(r|rua|av|avenida|alameda|al|rod|rodovia|estrada|estr|praca|pca|travessa|tv|viela|via|largo|ladeira|rua\/av|endereco)\b/;
+
+export function resolveRegionFromText(text: string | null | undefined, cep?: string | null): RegionResult {
+  const raw = String(text ?? "");
+  const normAll = normalizeBairro(raw);
+  if (!normAll) {
+    const porCep = regiaoPorCep(cep);
+    return porCep
+      ? { regiao: porCep, confidence: "media", method: "cep" }
+      : { regiao: null, confidence: "baixa", method: "indefinida" };
+  }
+
+  // Trava: cidade declarada fora de SJC (e sem marca de SJC) → não é nossa região.
+  if (NON_SJC_CITIES.test(normAll) && !SJC_MARK.test(normAll)) {
+    return { regiao: null, confidence: "baixa", method: "fora-sjc" };
+  }
+
+  // a) texto inteiro (cobre match exato, bairro embutido e dica de zona).
+  const whole = resolveRegion(raw, cep);
+  if (whole.regiao && whole.confidence !== "baixa") return whole;
+
+  // b) segmenta por delimitadores e resolve cada pedaço plausível de bairro.
+  const hits = new Map<Regiao, RegionResult>();
+  for (const segRaw of raw.split(/[\n|;\/]+|,| - | {2,}/)) {
+    const seg = segRaw.trim();
+    if (!seg) continue;
+    const lowOrig = normalizeBairro(seg);
+    if (!lowOrig || STREET_SEG.test(lowOrig)) continue; // descarta ruas/avenidas
+    // limpa ruído do segmento p/ isolar o bairro: rótulos, números/CEP e cidade.
+    const cleaned = lowOrig
+      .replace(/\b(cep|n|no|numero|num|apt|apto|ap|casa|bloco|bl|torre|lote|qd|quadra|complemento|compl|fundos|sim|nao|bairro|cidade|sp)\b/g, " ")
+      .replace(/\d+/g, " ")
+      .replace(SJC_MARK, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+    const toks = cleaned.split(" ").filter(Boolean);
+    if (cleaned.length < 4 || toks.length > 4) continue; // vazio/longo demais → não é bairro
+    const r = resolveRegion(cleaned, cep);
+    // aceita match direto OU aproximado (typo/abreviação/núcleo) — o pedaço já
+    // está limpo e curto, e a trava de cidade evita rotear fora de SJC.
+    if (r.regiao && r.method !== "indefinida" && r.method !== "cep") {
+      hits.set(r.regiao, r);
+    }
+  }
+  if (hits.size === 1) {
+    const r = [...hits.values()][0];
+    return { regiao: r.regiao, confidence: "media", method: "texto", matchedBairro: r.matchedBairro };
+  }
+
+  // c) CEP, senão indefinido.
+  const porCep = regiaoPorCep(cep);
+  if (porCep) return { regiao: porCep, confidence: "media", method: "cep" };
+  return { regiao: null, confidence: "baixa", method: "indefinida" };
 }
