@@ -189,6 +189,25 @@ define(['jquery'], function ($) {
       $modal.css('display', 'flex');
     }
 
+    // Seletor de MODO de impressão do lote (após escolher os leads): pular as já
+    // impressas (só novas/corrigidas) ou reimprimir TUDO. 1ª etapa da dupla
+    // confirmação — a 2ª é o modal de confirmação final.
+    var _pendingBatch = null;
+    function showReprintChoice(ids, byId) {
+      _pendingBatch = { ids: ids, byId: byId };
+      var $modal = $('#ge-modal');
+      $modal.find('#ge-modal-title').html('🖨️ Modo de impressão');
+      $modal.find('#ge-modal-body').html(
+        '<div style="font-size:12px;color:#666;margin-bottom:10px"><b>' + ids.length + '</b> lead(s) selecionado(s). Como gerar as etiquetas?</div>' +
+        '<div style="display:grid;gap:6px">' +
+          '<button class="ge-reprint-mode" data-mode="skip" style="padding:10px 4px;background:#43A047;color:#fff;border:none;border-radius:5px;font-size:12px;font-weight:700;cursor:pointer">✅ Pular já impressas (só novas/corrigidas)</button>' +
+          '<button class="ge-reprint-mode" data-mode="all" style="padding:10px 4px;background:#E53935;color:#fff;border:none;border-radius:5px;font-size:12px;font-weight:700;cursor:pointer">🔁 Reimprimir TUDO (inclui já impressas)</button>' +
+        '</div>'
+      );
+      $modal.find('#ge-modal-confirm').hide(); // a escolha do modo é a ação
+      $modal.css('display', 'flex');
+    }
+
     /* ── API calls ───────────────────────────────────────────────────────── */
 
     // Normaliza um lead (v4 ou current_card) para um formato único
@@ -617,7 +636,7 @@ define(['jquery'], function ($) {
                 if (rec && rec.internalOrderNotes) ml.regiao = rec.internalOrderNotes; // região do campo
               });
               var title = region ? ('🗺️ Lote — ' + region) : '📦 Gerar Lote';
-              showLeadSelection(title, validated, function (ids) { doBatchSelected(ids, byId); });
+              showLeadSelection(title, validated, function (ids) { showReprintChoice(ids, byId); });
             });
           });
         }, function (xhr) {
@@ -627,7 +646,7 @@ define(['jquery'], function ($) {
     }
 
     // Gera etiqueta dos leads selecionados, em chunks (seguro p/ timeout e estoque).
-    function doBatchSelected(ids, recordsById) {
+    function doBatchSelected(ids, recordsById, reprintPrinted) {
       var payloads = ids.map(function (id) { return recordsById[String(id)]; }).filter(Boolean);
       if (!payloads.length) return;
       var CH = 40, idx = 0, gen = 0, inc = 0, ded = 0, dup = 0, alr = 0;
@@ -656,7 +675,7 @@ define(['jquery'], function ($) {
           url: apiBase() + '/api/kommo/requests-batch-direct',
           method: 'POST',
           contentType: 'application/json',
-          data: JSON.stringify({ secret: cfg().api_key, deductStock: true, leads: chunk }),
+          data: JSON.stringify({ secret: cfg().api_key, deductStock: true, reprintPrinted: !!reprintPrinted, leads: chunk }),
           success: function (data) {
             gen += (data.generated || 0); inc += (data.incomplete || 0); ded += (data.stockDeducted || 0); dup += (data.duplicates || 0); alr += (data.alreadyPrinted || 0);
             next();
@@ -1369,6 +1388,19 @@ define(['jquery'], function ($) {
           })
           .on('click.ge', '#ge-btn-setregion-batch', function () {
             showSetRegionBatchChoice();
+          })
+          .on('click.ge', '.ge-reprint-mode', function () {
+            var reprintAll = String($(this).attr('data-mode')) === 'all';
+            $('#ge-modal').css('display', 'none');
+            if (!_pendingBatch) return;
+            var pb = _pendingBatch;
+            showModal(
+              reprintAll ? '🔁 Reimprimir TUDO?' : '✅ Gerar só os corrigidos?',
+              (reprintAll
+                ? 'Vai <b>reimprimir as ' + pb.ids.length + '</b> etiqueta(s) selecionada(s), <b style="color:#E53935">incluindo as já impressas</b>. Confirmar?'
+                : 'Vai gerar só as <b>novas/corrigidas</b> (as já impressas são puladas), de ' + pb.ids.length + ' selecionada(s). Confirmar?'),
+              function () { doBatchSelected(pb.ids, pb.byId, reprintAll); }
+            );
           })
           .on('click.ge', '.ge-setregion-mode', function () {
             var mode = String($(this).attr('data-mode'));
