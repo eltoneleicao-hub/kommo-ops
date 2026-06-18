@@ -1,4 +1,21 @@
 import { parseAddressField } from "./address-parser";
+import { toAsciiText } from "./encoding";
+
+/**
+ * Assinatura de DEDUPLICAÇÃO de uma etiqueta: identifica o mesmo destinatário
+ * (nome + endereço) de forma tolerante a acento/maiúscula/pontuação/formatação.
+ * Dois leads diferentes com a MESMA assinatura = etiqueta duplicada (não deve
+ * imprimir 2x). Vazio se não houver nome nem endereço (não deduplica nada).
+ */
+export function labelDedupeKey(input: LabelInput): string {
+  const norm = (s: string | null | undefined) =>
+    toAsciiText(s).toLowerCase().replace(/[^a-z0-9\s]+/g, "").replace(/\s+/g, " ").trim();
+  const parts = [input.recipientName, input.street, input.number, input.neighborhood, input.postalCode, input.city]
+    .map(norm);
+  const joined = parts.join("|");
+  // precisa ter nome E algum endereço pra ser uma assinatura confiável
+  return norm(input.recipientName) && parts.slice(1).some(Boolean) ? joined : "";
+}
 
 export type LabelInput = {
   recipientName?: string | null;

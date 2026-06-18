@@ -427,8 +427,10 @@ define(['jquery'], function ($) {
       var $modal = $('#ge-modal');
       $modal.find('#ge-modal-title').html(title);
 
-      var eligibles = leads.filter(function (l) { return l.eligible; });
+      // selecionável = elegível E não-duplicado (duplicado não imprime 2x)
+      var eligibles = leads.filter(function (l) { return l.eligible && !l.duplicate; });
       var ineligibles = leads.filter(function (l) { return !l.eligible; });
+      var dups = leads.filter(function (l) { return l.eligible && l.duplicate; });
       _lastIneligible = ineligibles;
 
       if (!eligibles.length) {
@@ -444,6 +446,10 @@ define(['jquery'], function ($) {
 
       var rows = leads.map(function (l) {
         var sub = [l.neighborhood, l.regiao].filter(Boolean).join(' · ');
+        if (l.eligible && l.duplicate) {
+          return '<div style="padding:5px 0;font-size:12px;color:#c0c0c0">⧉ ' + (l.recipientName || '(sem nome)') +
+            ' <small>duplicado' + (l.duplicateOf ? ' do lead #' + l.duplicateOf : '') + ' — não imprime 2x</small></div>';
+        }
         if (l.eligible) {
           return '<label style="display:flex;gap:6px;align-items:flex-start;padding:5px 0;font-size:12px;cursor:pointer">' +
             '<input type="checkbox" class="ge-sel" value="' + l.kommoLeadId + '" checked style="margin-top:2px">' +
@@ -460,6 +466,9 @@ define(['jquery'], function ($) {
         (ineligibles.length
           ? '<div style="margin-bottom:6px">' + ineligibleCsvButton(ineligibles.length) +
             ' <small style="color:#999">' + ineligibles.length + ' sem etiqueta (campos faltando)</small></div>'
+          : '') +
+        (dups.length
+          ? '<div style="margin-bottom:6px;font-size:11px;color:#FF9800">⧉ ' + dups.length + ' duplicado(s) — mesmo destinatário de outro lead, não imprime 2x</div>'
           : '') +
         '<div style="max-height:240px;overflow:auto;border-top:1px solid #eee;padding-top:6px">' + rows + '</div>'
       );
@@ -621,13 +630,14 @@ define(['jquery'], function ($) {
     function doBatchSelected(ids, recordsById) {
       var payloads = ids.map(function (id) { return recordsById[String(id)]; }).filter(Boolean);
       if (!payloads.length) return;
-      var CH = 40, idx = 0, gen = 0, inc = 0, ded = 0;
+      var CH = 40, idx = 0, gen = 0, inc = 0, ded = 0, dup = 0;
 
       function summary(prefix, extra) {
         setStatus(
           prefix +
           '<br><small>' + gen + ' etiqueta(s)</small>' +
           (inc > 0 ? '<br><small style="color:#FF9800">' + inc + ' incompletos</small>' : '') +
+          (dup > 0 ? '<br><small style="color:#FF9800">⧉ ' + dup + ' duplicado(s) pulado(s)</small>' : '') +
           (ded > 0 ? '<br><small>📦 ' + ded + ' convites deduzidos</small>' : '') +
           (extra || '')
         );
@@ -647,7 +657,7 @@ define(['jquery'], function ($) {
           contentType: 'application/json',
           data: JSON.stringify({ secret: cfg().api_key, deductStock: true, leads: chunk }),
           success: function (data) {
-            gen += (data.generated || 0); inc += (data.incomplete || 0); ded += (data.stockDeducted || 0);
+            gen += (data.generated || 0); inc += (data.incomplete || 0); ded += (data.stockDeducted || 0); dup += (data.duplicates || 0);
             next();
           },
           error: function (xhr) {

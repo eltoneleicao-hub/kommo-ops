@@ -17,7 +17,7 @@ import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
 import { z } from "zod";
 import { prisma } from "@/lib/prisma";
-import { renderLabelText, validateLabelInput } from "@/domain/labels";
+import { renderLabelText, validateLabelInput, labelDedupeKey } from "@/domain/labels";
 import { getRequestStatusForMissingFields } from "@/domain/requests";
 import { resolveRegion } from "@/domain/region-resolver";
 import { fixMojibake } from "@/domain/encoding";
@@ -92,13 +92,51 @@ export async function POST(request: NextRequest) {
   const { deductStock, validateOnly } = parsed.data;
   const leads = parsed.data.leads.map(sanitizeLead);
 
-  // Modo validação: só devolve elegibilidade (não grava nada).
+  // ── Deduplicação ──────────────────────────────────────────────────────────
+  // Carrega a assinatura (nome+endereço) de TODA etiqueta já existente (não-erro)
+  // e mapeia para os leads donos. Um lead é DUPLICADO se sua assinatura já
+  // pertence a OUTRO lead (não conta a si mesmo: reimpressão é permitida).
+  const existingLabels = await prisma.label.findMany({
+    where: { printStatus: { not: "erro" } },
+    select: {
+      MaterialRequest: {
+        select: {
+          kommoLeadId: true, recipientName: true, street: true,
+          number: true, neighborhood: true, postalCode: true, city: true,
+        },
+      },
+    },
+  });
+  const keyToLeads = new Map<string, Set<string>>();
+  for (const lab of existingLabels) {
+    const mr = lab.MaterialRequest;
+    if (!mr) continue;
+    const k = labelDedupeKey(mr);
+    if (!k) continue;
+    if (!keyToLeads.has(k)) keyToLeads.set(k, new Set());
+    keyToLeads.get(k)!.add(mr.kommoLeadId ?? "");
+  }
+  // Devolve o lead-dono de uma assinatura, se for OUTRO lead (DB ou lote atual).
+  const dupOwnerOf = (l: LeadPayload, seen: Map<string, string>): string | null => {
+    const k = labelDedupeKey(l);
+    if (!k) return null;
+    const owners = keyToLeads.get(k);
+    if (owners) { for (const id of owners) if (id && id !== l.kommoLeadId) return id; }
+    const s = seen.get(k);
+    return s && s !== l.kommoLeadId ? s : null;
+  };
+
+  // Modo validação: devolve elegibilidade + flag de duplicado (não grava nada).
   if (validateOnly) {
+    const seen = new Map<string, string>();
     return withCors(
       NextResponse.json({
         total: leads.length,
         leads: leads.map((l) => {
           const missing = validateLabelInput(labelInputOf(l));
+          const duplicateOf = dupOwnerOf(l, seen);
+          const k = labelDedupeKey(l);
+          if (k && !seen.has(k)) seen.set(k, l.kommoLeadId);
           return {
             kommoLeadId: l.kommoLeadId,
             recipientName: l.recipientName ?? "",
@@ -106,6 +144,8 @@ export async function POST(request: NextRequest) {
             regiao: resolveRegion(l.neighborhood, l.postalCode).regiao,
             eligible: missing.length === 0,
             missingFields: missing,
+            duplicate: duplicateOf != null,
+            duplicateOf: duplicateOf,
           };
         }),
       }),
@@ -113,8 +153,21 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  // Pré-checagem de estoque para todos os elegíveis (evita gerar parcial).
-  const eligible = leads.filter((l) => validateLabelInput(labelInputOf(l)).length === 0).length;
+  // Marca duplicados na ordem do lote: o 1º com uma assinatura vence, os demais
+  // (deste lote ou já existentes no banco) são pulados pra não imprimir 2x.
+  const seenGen = new Map<string, string>();
+  const dupOf = new Map<string, string>(); // kommoLeadId -> lead-dono
+  for (const l of leads) {
+    const owner = dupOwnerOf(l, seenGen);
+    if (owner) dupOf.set(l.kommoLeadId, owner);
+    const k = labelDedupeKey(l);
+    if (k && !seenGen.has(k)) seenGen.set(k, l.kommoLeadId);
+  }
+
+  // Pré-checagem de estoque só p/ elegíveis NÃO-duplicados (evita gerar parcial).
+  const eligible = leads.filter(
+    (l) => !dupOf.has(l.kommoLeadId) && validateLabelInput(labelInputOf(l)).length === 0,
+  ).length;
   if (deductStock && eligible > 0) {
     const sku = process.env.STOCK_PRODUCT_SKU;
     const locationName = process.env.STOCK_LOCATION_NAME;
@@ -147,9 +200,16 @@ export async function POST(request: NextRequest) {
   let generated = 0;
   let incomplete = 0;
   let stockDeducted = 0;
+  let duplicates = 0;
   const results: Array<Record<string, unknown>> = [];
 
   for (const l of leads) {
+    // Trava de duplicado: mesmo destinatário que outro lead → não gera/imprime.
+    if (dupOf.has(l.kommoLeadId)) {
+      duplicates++;
+      results.push({ kommoLeadId: l.kommoLeadId, status: "duplicado", duplicateOf: dupOf.get(l.kommoLeadId) });
+      continue;
+    }
     try {
       const labelInput = labelInputOf(l);
       const missingFields = validateLabelInput(labelInput);
@@ -255,7 +315,10 @@ export async function POST(request: NextRequest) {
   }
 
   return withCors(
-    NextResponse.json({ generated, incomplete, total: generated + incomplete, stockDeducted, results }),
+    NextResponse.json({
+      generated, incomplete, duplicates,
+      total: generated + incomplete + duplicates, stockDeducted, results,
+    }),
     origin,
   );
 }

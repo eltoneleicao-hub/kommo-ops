@@ -106,7 +106,8 @@ describe("renderLabelZPL — campos longos quebram (não só o nome)", () => {
       internalOrderNotes: "Sul", recipientPhone: "",
     });
     expect(zpl).toContain("PQ INDUSTRIAL");     // bairro preservado inline
-    expect(zpl).not.toContain("\n^FD");          // sem quebra crua dentro do ^FD
+    const fds = [...zpl.matchAll(/\^FD([^]*?)\^FS/g)].map((m) => m[1]);
+    expect(fds.every((t) => !t.includes("\n"))).toBe(true); // sem quebra crua no campo
     expect(zpl).not.toMatch(/\^FD\s*,/);         // sem linha começando com vírgula órfã
   });
 });

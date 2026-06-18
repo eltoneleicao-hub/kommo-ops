@@ -1,6 +1,24 @@
 import { describe, expect, it } from "vitest";
-import { normalizeAddressInput, renderLabelText, validateLabelInput } from "./labels";
+import { normalizeAddressInput, renderLabelText, validateLabelInput, labelDedupeKey } from "./labels";
 import { resolveRegion } from "./region-resolver";
+
+describe("labelDedupeKey", () => {
+  const base = { recipientName: "Maria Silva", street: "Rua A, 100", neighborhood: "Centro", postalCode: "12200000", city: "SJC" };
+  it("mesma info (formatação/acento diferente) → mesma chave", () => {
+    const a = labelDedupeKey({ recipientName: "MARÍA SÍLVA", street: "Rua A 100", neighborhood: "centro", postalCode: "12200-000", city: "sjc" });
+    const b = labelDedupeKey(base);
+    expect(a).toBe(b);
+    expect(a).not.toBe("");
+  });
+  it("nome ou endereço diferente → chave diferente", () => {
+    expect(labelDedupeKey({ ...base, recipientName: "Joao Souza" })).not.toBe(labelDedupeKey(base));
+    expect(labelDedupeKey({ ...base, street: "Rua B, 200" })).not.toBe(labelDedupeKey(base));
+  });
+  it("sem nome ou sem endereço → chave vazia (não deduplica)", () => {
+    expect(labelDedupeKey({ recipientName: "", street: "Rua A" })).toBe("");
+    expect(labelDedupeKey({ recipientName: "Maria", street: "" })).toBe("");
+  });
+});
 
 const completeInput = {
   recipientName: "Maria Silva",
