@@ -964,12 +964,18 @@ define(['jquery'], function ($) {
       var sub = ''; try { sub = self.system().subdomain; } catch (e) {}
       // grupos ordenados por "precisa de ação" primeiro
       var GRUPOS = [
-        { key: 'nao_gerada',  rotulo: 'Não gerada',     hint: 'precisa gerar / corrigir', cor: '#e53935' },
-        { key: 'sem_etiqueta',rotulo: 'Sem etiqueta',   hint: 'campos faltando',          cor: '#fb8c00' },
-        { key: 'erro',        rotulo: 'Erro de impressão', hint: 'reimprimir/checar',     cor: '#d81b60' },
-        { key: 'processando', rotulo: 'Processando',     hint: 'em andamento',             cor: '#8e24aa' },
-        { key: 'pendente',    rotulo: 'Pendente',        hint: 'na fila p/ imprimir',      cor: '#1e88e5' },
-        { key: 'impresso',    rotulo: 'Impresso',        hint: 'concluído',                cor: '#43a047' },
+        { key: 'nao_gerada',  rotulo: 'Não gerada',     hint: 'falta gerar',     cor: '#e53935',
+          expl: 'Ainda NÃO foi gerada. Em geral falta definir a região e rodar o lote — ou o lead é de outra cidade.' },
+        { key: 'sem_etiqueta',rotulo: 'Sem etiqueta',   hint: 'falta um dado',   cor: '#fb8c00',
+          expl: 'Tentamos gerar, mas faltou um dado (nome, endereço ou região). Complete o campo no lead e gere de novo.' },
+        { key: 'erro',        rotulo: 'Erro',           hint: 'reimprimir',      cor: '#d81b60',
+          expl: 'A etiqueta foi gerada mas a impressão falhou. Veja o motivo no Detalhe e mande reimprimir.' },
+        { key: 'processando', rotulo: 'Processando',    hint: 'imprimindo',      cor: '#8e24aa',
+          expl: 'Está sendo impressa agora.' },
+        { key: 'pendente',    rotulo: 'Pendente',       hint: 'na fila',         cor: '#1e88e5',
+          expl: 'Já está na fila — vai sair assim que o agente de impressão rodar.' },
+        { key: 'impresso',    rotulo: 'Impresso',       hint: 'concluído',       cor: '#43a047',
+          expl: 'Já saiu na impressora. Nada a fazer.' },
       ];
       // classifica cada lead
       var buckets = {}; GRUPOS.forEach(function (g) { buckets[g.key] = []; });
@@ -1007,6 +1013,12 @@ define(['jquery'], function ($) {
           '<div class="cn" style="color:' + cor + '">' + n + '</div><div class="ct">' + t + '</div></div>';
       }
 
+      // legenda "Como ler" — só os status presentes neste relatório, em linguagem simples
+      var legenda = GRUPOS.filter(function (g) { return buckets[g.key].length; }).map(function (g) {
+        return '<li><span class="dot" style="background:' + g.cor + '"></span>' +
+          '<b>' + g.rotulo + ' (' + buckets[g.key].length + ')</b> — ' + escHtml(g.expl) + '</li>';
+      }).join('');
+
       var secs = GRUPOS.map(function (g) {
         var arr = buckets[g.key]; if (!arr.length) return '';
         var rows = arr.map(function (r) {
@@ -1034,7 +1046,11 @@ define(['jquery'], function ($) {
         '.cards{display:flex;gap:12px;margin-bottom:16px;flex-wrap:wrap}' +
         '.card{flex:1;min-width:120px;background:#fff;border-radius:10px;padding:14px 16px;box-shadow:0 1px 4px rgba(0,0,0,.08)}' +
         '.cn{font-size:30px;font-weight:800;line-height:1}.ct{font-size:12px;color:#607d8b;margin-top:4px;text-transform:uppercase;letter-spacing:.5px}' +
-        '.bar{display:flex;height:14px;border-radius:8px;overflow:hidden;margin-bottom:8px;background:#e0e0e0}.bar span{display:block}' +
+        '.bar{display:flex;height:14px;border-radius:8px;overflow:hidden;margin-bottom:6px;background:#e0e0e0}.bar span{display:block}' +
+        '.barhint{font-size:12px;color:#90a4ae;margin:0 0 14px}' +
+        '.leg{background:#fff;border-radius:10px;box-shadow:0 1px 4px rgba(0,0,0,.08);margin-bottom:16px;padding:10px 16px}' +
+        '.leg summary{font-size:14px;font-weight:700;cursor:pointer;color:#37474f}' +
+        '.leg ul{list-style:none;margin:10px 0 2px;padding:0}.leg li{font-size:12.5px;color:#546e7a;margin:6px 0;line-height:1.5}.leg li b{color:#37474f}.leg .dot{margin-right:6px;vertical-align:1px}' +
         '.toolbar{margin:10px 0 22px;display:flex;gap:8px}' +
         '.btn{padding:8px 14px;border:none;border-radius:6px;font-size:13px;font-weight:700;cursor:pointer;color:#fff}' +
         '.grp{background:#fff;border-radius:10px;box-shadow:0 1px 4px rgba(0,0,0,.08);margin-bottom:16px;overflow:hidden}' +
@@ -1051,6 +1067,8 @@ define(['jquery'], function ($) {
         '<p class="sub">' + escHtml(sub) + '.kommo.com · ' + total + ' leads na etapa</p>' +
         '<div class="cards">' + cards + '</div>' +
         '<div class="bar">' + barSegs + '</div>' +
+        '<p class="barhint">⬅ pronto · precisa de ação ➡</p>' +
+        '<details class="leg" open><summary>Como ler este relatório</summary><ul>' + legenda + '</ul></details>' +
         '<div class="toolbar">' +
           '<button class="btn" style="background:#546e7a" onclick="window.print()">🖨️ Imprimir / PDF</button>' +
         '</div>' +
