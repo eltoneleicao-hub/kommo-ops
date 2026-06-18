@@ -970,10 +970,13 @@ define(['jquery'], function ($) {
                 id: String(l.id),
                 name: l.name || ('Lead ' + l.id),
                 bairro: extractField(fields, ['Bairro']),
-                cep: extractField(fields, ['CEP', 'Cep'])
+                cep: extractField(fields, ['CEP', 'Cep']),
+                // bloco de endereço (fallback p/ leads agrupados Origem/Destino,
+                // onde o Bairro separado vem vazio) — backend parseia o Destino.
+                endereco: extractField(fields, ['Rua/Avenida', 'Endereco', 'Endereço', 'Logradouro', 'Rua'])
               };
               meta[info.id] = info;
-              items.push({ id: info.id, bairro: info.bairro, cep: info.cep });
+              items.push({ id: info.id, bairro: info.bairro, cep: info.cep, endereco: info.endereco });
             });
 
             if (!items.length) {

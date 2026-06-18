@@ -15,6 +15,7 @@ import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
 import { z } from "zod";
 import { resolveRegion } from "@/domain/region-resolver";
+import { normalizeAddressInput } from "@/domain/labels";
 import { withCors, corsPreflight } from "@/lib/cors";
 
 export async function OPTIONS(request: NextRequest) {
@@ -29,6 +30,9 @@ const payloadSchema = z.object({
         id: z.union([z.string(), z.number()]),
         bairro: z.string().optional(),
         cep: z.string().optional(),
+        // Bloco de endereço (campo "Rua/Avenida"), usado como fallback quando
+        // bairro/CEP separados estão vazios (leads no formato Origem/Destino).
+        endereco: z.string().optional(),
       }),
     )
     .max(5000),
@@ -47,7 +51,18 @@ export async function POST(request: NextRequest) {
   }
 
   const results = parsed.data.items.map((it) => {
-    const resolved = resolveRegion(it.bairro, it.cep);
+    let bairro = it.bairro;
+    let cep = it.cep;
+
+    // Sem bairro separado? Parseia o bloco de endereço (usa o Destino, ignora a
+    // Origem; extrai Bairro/CEP). Evita resolver pela Origem errada.
+    if (!bairro?.trim() && it.endereco?.trim()) {
+      const norm = normalizeAddressInput({ street: it.endereco });
+      bairro = norm.neighborhood ?? "";
+      if (!cep?.trim()) cep = norm.postalCode ?? "";
+    }
+
+    const resolved = resolveRegion(bairro, cep);
     return {
       id: String(it.id),
       regiao: resolved.regiao,
