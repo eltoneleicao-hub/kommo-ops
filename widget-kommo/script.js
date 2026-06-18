@@ -868,8 +868,10 @@ define(['jquery'], function ($) {
     // Gera um CSV (com BOM p/ Excel abrir acentos) e dispara o download no navegador.
     function downloadCsv(filename, header, rows) {
       function esc(v) {
-        var s = String(v == null ? '' : v);
-        return /[",;\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+        // tira QUALQUER quebra de linha (\r, \n, \r\n) da célula — senão o Excel
+        // quebra a linha no meio e desalinha as colunas (ID não bate com o link).
+        var s = String(v == null ? '' : v).replace(/[\r\n]+/g, ' ').replace(/\s+/g, ' ').trim();
+        return /[",;]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
       }
       var lines = [header.map(esc).join(';')];
       rows.forEach(function (r) { lines.push(r.map(esc).join(';')); });
