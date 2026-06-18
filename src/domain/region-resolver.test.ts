@@ -208,6 +208,23 @@ describe("resolveRegion — fora de SJC / incertos seguem p/ manual (null)", () 
   });
 });
 
+describe("resolveRegion — endereço em texto livre (campo Rua/Avenida cru)", () => {
+  it("acha bairro embutido em SJC e resolve", () => {
+    expect(
+      resolveRegion("Rua castor número 25 Apt 182 cp12230320 jardim satélite cidade são José dos Campos").regiao,
+    ).toBe("Sul");
+    expect(
+      resolveRegion("Rua Letícia de Moraes Vieira 82 \nCep 12226-360\nCampos de São José \nSão José dos Campos").regiao,
+    ).toBe("Leste");
+  });
+
+  it("endereço de OUTRA cidade não vira região de SJC (null)", () => {
+    expect(resolveRegion("Rua/Av: X\nBairro: JARDIM GARCEZ\nCidade: TAUBATÉ").regiao).toBeNull();
+    expect(resolveRegion("cond Belavista\nBairro Maria Elmira,Caçapava ,SP\nCep 12285020").regiao).toBeNull();
+    expect(resolveRegion("Rua Dom José 1 n 78\n12310-047 \nPq dos Príncipes \nJacareí - SP").regiao).toBeNull();
+  });
+});
+
 describe("resolveRegion — fuzzy (erros de digitação)", () => {
   it("Barrinho → Bairrinho → Leste (media, fuzzy)", () => {
     const r = resolveRegion("Barrinho");

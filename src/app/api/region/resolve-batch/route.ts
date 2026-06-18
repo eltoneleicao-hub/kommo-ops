@@ -62,7 +62,16 @@ export async function POST(request: NextRequest) {
       if (!cep?.trim()) cep = norm.postalCode ?? "";
     }
 
-    const resolved = resolveRegion(bairro, cep);
+    let resolved = resolveRegion(bairro, cep);
+
+    // Fallback p/ endereço em texto livre (sem "Bairro:" rotulado): varre o bloco
+    // cru procurando um bairro conhecido (detecção embutida do resolver). Só roda
+    // quando o passo acima NÃO resolveu — assim o caso Origem/Destino (que já
+    // extraiu o Destino) não cai aqui e não corre risco de pegar a Origem.
+    if (!resolved.regiao && it.endereco?.trim()) {
+      resolved = resolveRegion(it.endereco, cep);
+    }
+
     return {
       id: String(it.id),
       regiao: resolved.regiao,
