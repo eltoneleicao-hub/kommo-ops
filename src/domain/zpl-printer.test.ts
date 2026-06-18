@@ -97,4 +97,16 @@ describe("renderLabelZPL — campos longos quebram (não só o nome)", () => {
     expect(zpl).toContain("^FDREGIAO: SUL^FS");
     expect(zpl).not.toContain("REGIAO: REGIAO");
   });
+
+  it("endereço em bloco de texto livre: achata e NÃO perde o bairro", () => {
+    // bloco inteiro no campo street, campos discretos vazios (lead típico do Kommo)
+    const zpl = renderLabelZPL({
+      recipientName: "Maria",
+      street: "Rua icatu 330 apto 82C\nCEP 12235649\nPq industrial\nSão José dos Campos",
+      internalOrderNotes: "Sul", recipientPhone: "",
+    });
+    expect(zpl).toContain("PQ INDUSTRIAL");     // bairro preservado inline
+    expect(zpl).not.toContain("\n^FD");          // sem quebra crua dentro do ^FD
+    expect(zpl).not.toMatch(/\^FD\s*,/);         // sem linha começando com vírgula órfã
+  });
 });

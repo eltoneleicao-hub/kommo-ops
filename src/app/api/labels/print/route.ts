@@ -74,8 +74,13 @@ export async function POST(request: NextRequest) {
     // 3. Normalizar endereço (fallback para campos combinados)
     const normalized = normalizeAddressInput(input);
 
+    // 3.1 Se o parse NÃO isolou o bairro, ele tende a mutilar o bloco de texto
+    //     livre e PERDER o bairro/cidade. Nesse caso renderiza o input ORIGINAL
+    //     (bloco inteiro, que o renderLabelZPL achata) — sem perder nada.
+    const renderInput = String(normalized.neighborhood ?? "").trim() ? normalized : input;
+
     // 4. Gerar ZPL
-    const zplContent = renderLabelZPL(normalized);
+    const zplContent = renderLabelZPL(renderInput);
 
     // 5. Validar ZPL
     if (!validateZPL(zplContent)) {
