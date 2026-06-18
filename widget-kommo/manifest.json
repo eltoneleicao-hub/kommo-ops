@@ -3,23 +3,36 @@
     "name": "widget.name",
     "description": "widget.description",
     "short_description": "widget.short_description",
-    "version": "1.2.12",
+    "version": "1.2.13",
     "interface_version": 2,
     "init_once": false,
-    "locale": ["pt", "en", "es"],
+    "locale": [
+      "pt",
+      "en",
+      "es"
+    ],
     "installation": true,
     "support": {
       "link": "https://kommo-ops.vercel.app",
       "email": "willianmario.ia@gmail.com"
     }
   },
-  "locations": ["settings", "lcard-1"],
+  "locations": [
+    "settings",
+    "lcard-1"
+  ],
   "tour": {
     "is_tour": true,
     "tour_images": {
-      "pt": ["/images/slideshow_1_pt.jpg"],
-      "en": ["/images/slideshow_1_en.jpg"],
-      "es": ["/images/slideshow_1_es.jpg"]
+      "pt": [
+        "/images/slideshow_1_pt.jpg"
+      ],
+      "en": [
+        "/images/slideshow_1_en.jpg"
+      ],
+      "es": [
+        "/images/slideshow_1_es.jpg"
+      ]
     },
     "tour_description": "widget.tour_description"
   },

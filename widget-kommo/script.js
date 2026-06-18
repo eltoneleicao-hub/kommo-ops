@@ -894,6 +894,7 @@ define(['jquery'], function ($) {
      * no banco; aqui aparecem como "Não gerada").
      */
     var _lastReport = null;
+    var _lastReportData = null;
     function doStageReport() {
       setStatus('⏳ Lendo leads da etapa no Kommo...');
       getLead(function (err, lead) {
@@ -940,16 +941,136 @@ define(['jquery'], function ($) {
         return [m.id, m.name || '', regiao, statusTxt, detalhe, dataImp, link];
       });
       _lastReport = { header: ['Lead ID', 'Nome', 'Região', 'Status', 'Detalhe', 'Data impressão', 'Link Kommo'], rows: rows };
+      _lastReportData = { meta: meta, statuses: statuses, counts: counts, total: meta.length };
       var faltam = meta.length - counts.impresso;
       setStatus(
         '<span style="color:#4CAF50;font-weight:bold">✓ ' + counts.impresso + ' impresso(s)</span>' +
-        '<br><span style="color:#FF9800;font-weight:bold">⚠ ' + faltam + ' faltando</span> de ' + meta.length + ' ' +
-        '<button id="ge-csv-report" style="padding:2px 8px;background:#546E7A;color:#fff;border:none;border-radius:4px;font-size:11px;font-weight:700;cursor:pointer">⬇️ CSV</button>' +
-        '<ul style="margin:4px 0 0 16px;padding:0;font-size:11px">' +
-        '<li>Pendente: ' + counts.pendente + ' · Processando: ' + counts.processando + '</li>' +
-        '<li>Erro: ' + counts.erro + ' · Sem etiqueta: ' + counts.sem_etiqueta + ' · Não gerada: ' + counts.nao_gerada + '</li>' +
-        '</ul>'
+        ' · <span style="color:#FF9800;font-weight:bold">⚠ ' + faltam + ' faltando</span> de ' + meta.length +
+        '<div style="display:flex;gap:6px;margin-top:6px">' +
+          '<button id="ge-open-report" style="flex:1;padding:6px 4px;background:#3F51B5;color:#fff;border:none;border-radius:4px;font-size:11px;font-weight:700;cursor:pointer">📊 Abrir relatório</button>' +
+          '<button id="ge-csv-report" style="flex:1;padding:6px 4px;background:#546E7A;color:#fff;border:none;border-radius:4px;font-size:11px;font-weight:700;cursor:pointer">⬇️ CSV</button>' +
+        '</div>'
       );
+    }
+
+    /* ── Relatório VISUAL (abre em nova aba, com cores e agrupamento) ────────── */
+    function escHtml(v) {
+      return String(v == null ? '' : v).replace(/[&<>"']/g, function (c) {
+        return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+      });
+    }
+
+    function buildReportHtml(data) {
+      var sub = ''; try { sub = self.system().subdomain; } catch (e) {}
+      // grupos ordenados por "precisa de ação" primeiro
+      var GRUPOS = [
+        { key: 'nao_gerada',  rotulo: 'Não gerada',     hint: 'precisa gerar / corrigir', cor: '#e53935' },
+        { key: 'sem_etiqueta',rotulo: 'Sem etiqueta',   hint: 'campos faltando',          cor: '#fb8c00' },
+        { key: 'erro',        rotulo: 'Erro de impressão', hint: 'reimprimir/checar',     cor: '#d81b60' },
+        { key: 'processando', rotulo: 'Processando',     hint: 'em andamento',             cor: '#8e24aa' },
+        { key: 'pendente',    rotulo: 'Pendente',        hint: 'na fila p/ imprimir',      cor: '#1e88e5' },
+        { key: 'impresso',    rotulo: 'Impresso',        hint: 'concluído',                cor: '#43a047' },
+      ];
+      // classifica cada lead
+      var buckets = {}; GRUPOS.forEach(function (g) { buckets[g.key] = []; });
+      data.meta.forEach(function (m) {
+        var s = data.statuses[m.id], status, detalhe = '';
+        if (!s) { status = 'nao_gerada'; detalhe = m.regiao ? 'nunca gerou etiqueta' : 'sem região'; }
+        else {
+          status = s.status;
+          if (status === 'erro') detalhe = s.errorMessage || '';
+          else if (status === 'sem_etiqueta') detalhe = (s.missingFields || []).join(', ');
+        }
+        var regiao = (s && s.regiao) || m.regiao || '—';
+        var dataImp = (s && s.printedAt) ? String(s.printedAt).slice(0, 10) : '';
+        (buckets[status] || buckets.nao_gerada).push({ id: m.id, name: m.name, regiao: regiao, detalhe: detalhe, data: dataImp });
+      });
+
+      var total = data.total || data.meta.length;
+      var impresso = (data.counts && data.counts.impresso) || (buckets.impresso ? buckets.impresso.length : 0);
+      var faltando = total - impresso;
+
+      // barra de proporção
+      var barSegs = GRUPOS.map(function (g) {
+        var n = buckets[g.key].length; if (!n) return '';
+        var pct = (n / total * 100).toFixed(2);
+        return '<span style="width:' + pct + '%;background:' + g.cor + '" title="' + g.rotulo + ': ' + n + '"></span>';
+      }).join('');
+
+      var cards =
+        card('Total', total, '#37474f') +
+        card('Impresso', impresso, '#43a047') +
+        card('Faltando', faltando, '#fb8c00');
+
+      function card(t, n, cor) {
+        return '<div class="card" style="border-top:4px solid ' + cor + '">' +
+          '<div class="cn" style="color:' + cor + '">' + n + '</div><div class="ct">' + t + '</div></div>';
+      }
+
+      var secs = GRUPOS.map(function (g) {
+        var arr = buckets[g.key]; if (!arr.length) return '';
+        var rows = arr.map(function (r) {
+          var link = sub ? 'https://' + sub + '.kommo.com/leads/detail/' + r.id : '#';
+          return '<tr>' +
+            '<td><a href="' + link + '" target="_blank">' + escHtml(r.id) + '</a></td>' +
+            '<td>' + escHtml(r.name) + '</td>' +
+            '<td>' + escHtml(r.regiao) + '</td>' +
+            '<td class="det">' + escHtml(r.detalhe || (r.data ? r.data : '')) + '</td>' +
+            '</tr>';
+        }).join('');
+        return '<section class="grp">' +
+          '<h2><span class="dot" style="background:' + g.cor + '"></span>' + g.rotulo +
+          ' <b>' + arr.length + '</b> <small>' + g.hint + '</small></h2>' +
+          '<table><thead><tr><th>Lead</th><th>Nome</th><th>Região</th><th>Detalhe</th></tr></thead>' +
+          '<tbody>' + rows + '</tbody></table></section>';
+      }).join('');
+
+      return '<!doctype html><html lang="pt-br"><head><meta charset="utf-8">' +
+        '<meta name="viewport" content="width=device-width,initial-scale=1">' +
+        '<title>Relatório do Lote</title><style>' +
+        'body{font-family:-apple-system,Segoe UI,Roboto,Arial,sans-serif;margin:0;background:#f4f6f8;color:#263238}' +
+        '.wrap{max-width:920px;margin:0 auto;padding:24px 18px 60px}' +
+        'h1{font-size:22px;margin:0 0 4px}.sub{color:#78909c;font-size:13px;margin:0 0 18px}' +
+        '.cards{display:flex;gap:12px;margin-bottom:16px;flex-wrap:wrap}' +
+        '.card{flex:1;min-width:120px;background:#fff;border-radius:10px;padding:14px 16px;box-shadow:0 1px 4px rgba(0,0,0,.08)}' +
+        '.cn{font-size:30px;font-weight:800;line-height:1}.ct{font-size:12px;color:#607d8b;margin-top:4px;text-transform:uppercase;letter-spacing:.5px}' +
+        '.bar{display:flex;height:14px;border-radius:8px;overflow:hidden;margin-bottom:8px;background:#e0e0e0}.bar span{display:block}' +
+        '.toolbar{margin:10px 0 22px;display:flex;gap:8px}' +
+        '.btn{padding:8px 14px;border:none;border-radius:6px;font-size:13px;font-weight:700;cursor:pointer;color:#fff}' +
+        '.grp{background:#fff;border-radius:10px;box-shadow:0 1px 4px rgba(0,0,0,.08);margin-bottom:16px;overflow:hidden}' +
+        '.grp h2{font-size:15px;margin:0;padding:12px 16px;border-bottom:1px solid #eceff1;display:flex;align-items:center;gap:8px}' +
+        '.grp h2 b{margin-left:2px}.grp h2 small{color:#90a4ae;font-weight:400;margin-left:auto;font-size:12px}' +
+        '.dot{width:12px;height:12px;border-radius:50%;display:inline-block}' +
+        'table{width:100%;border-collapse:collapse;font-size:13px}' +
+        'th{text-align:left;color:#90a4ae;font-weight:600;font-size:11px;text-transform:uppercase;padding:8px 16px}' +
+        'td{padding:8px 16px;border-top:1px solid #f0f2f4}tr:hover td{background:#fafbfc}' +
+        'td a{color:#1e88e5;text-decoration:none}.det{color:#78909c}' +
+        '@media print{.toolbar{display:none}body{background:#fff}.card,.grp{box-shadow:none;border:1px solid #eceff1}}' +
+        '</style></head><body><div class="wrap">' +
+        '<h1>📋 Relatório do Lote</h1>' +
+        '<p class="sub">' + escHtml(sub) + '.kommo.com · ' + total + ' leads na etapa</p>' +
+        '<div class="cards">' + cards + '</div>' +
+        '<div class="bar">' + barSegs + '</div>' +
+        '<div class="toolbar">' +
+          '<button class="btn" style="background:#546e7a" onclick="window.print()">🖨️ Imprimir / PDF</button>' +
+        '</div>' +
+        secs +
+        '</div></body></html>';
+    }
+
+    function openVisualReport() {
+      if (!_lastReportData) return;
+      var html = buildReportHtml(_lastReportData);
+      var w = window.open('', '_blank');
+      if (w && w.document) { w.document.open(); w.document.write(html); w.document.close(); }
+      else {
+        // popup bloqueado → baixa o HTML
+        var blob = new Blob([html], { type: 'text/html;charset=utf-8' });
+        var url = URL.createObjectURL(blob);
+        var a = document.createElement('a'); a.href = url; a.download = 'relatorio-lote.html';
+        document.body.appendChild(a); a.click();
+        setTimeout(function () { document.body.removeChild(a); URL.revokeObjectURL(url); }, 0);
+      }
     }
 
     function renderRegionBatchSummary(ok, fail, manual, skipped) {
@@ -1231,6 +1352,9 @@ define(['jquery'], function ($) {
           })
           .on('click.ge', '#ge-csv-report', function () {
             if (_lastReport) downloadCsv('relatorio-lote.csv', _lastReport.header, _lastReport.rows);
+          })
+          .on('click.ge', '#ge-open-report', function () {
+            openVisualReport();
           })
           .on('click.ge', '#ge-btn-region-batch', function () {
             showRegionPicker();
