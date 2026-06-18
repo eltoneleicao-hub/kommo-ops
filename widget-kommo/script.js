@@ -630,12 +630,13 @@ define(['jquery'], function ($) {
     function doBatchSelected(ids, recordsById) {
       var payloads = ids.map(function (id) { return recordsById[String(id)]; }).filter(Boolean);
       if (!payloads.length) return;
-      var CH = 40, idx = 0, gen = 0, inc = 0, ded = 0, dup = 0;
+      var CH = 40, idx = 0, gen = 0, inc = 0, ded = 0, dup = 0, alr = 0;
 
       function summary(prefix, extra) {
         setStatus(
           prefix +
           '<br><small>' + gen + ' etiqueta(s)</small>' +
+          (alr > 0 ? '<br><small style="color:#999">✓ ' + alr + ' já impressa(s) (puladas)</small>' : '') +
           (inc > 0 ? '<br><small style="color:#FF9800">' + inc + ' incompletos</small>' : '') +
           (dup > 0 ? '<br><small style="color:#FF9800">⧉ ' + dup + ' duplicado(s) pulado(s)</small>' : '') +
           (ded > 0 ? '<br><small>📦 ' + ded + ' convites deduzidos</small>' : '') +
@@ -657,7 +658,7 @@ define(['jquery'], function ($) {
           contentType: 'application/json',
           data: JSON.stringify({ secret: cfg().api_key, deductStock: true, leads: chunk }),
           success: function (data) {
-            gen += (data.generated || 0); inc += (data.incomplete || 0); ded += (data.stockDeducted || 0); dup += (data.duplicates || 0);
+            gen += (data.generated || 0); inc += (data.incomplete || 0); ded += (data.stockDeducted || 0); dup += (data.duplicates || 0); alr += (data.alreadyPrinted || 0);
             next();
           },
           error: function (xhr) {

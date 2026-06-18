@@ -48,6 +48,9 @@ const payloadSchema = z.object({
   secret: z.string().min(1),
   deductStock: z.boolean().optional().default(false),
   validateOnly: z.boolean().optional().default(false),
+  // false (padrão): NÃO re-enfileira etiquetas já "impresso" — re-rodar o lote
+  // imprime só as novas/corrigidas. true: força reimpressão das já impressas.
+  reprintPrinted: z.boolean().optional().default(false),
   leads: z.array(leadSchema).min(1).max(500),
 });
 
@@ -89,7 +92,7 @@ export async function POST(request: NextRequest) {
     return withCors(NextResponse.json({ error: "unauthorized" }, { status: 401 }), origin);
   }
 
-  const { deductStock, validateOnly } = parsed.data;
+  const { deductStock, validateOnly, reprintPrinted } = parsed.data;
   const leads = parsed.data.leads.map(sanitizeLead);
 
   // ── Deduplicação ──────────────────────────────────────────────────────────
@@ -201,6 +204,7 @@ export async function POST(request: NextRequest) {
   let incomplete = 0;
   let stockDeducted = 0;
   let duplicates = 0;
+  let alreadyPrinted = 0;
   const results: Array<Record<string, unknown>> = [];
 
   for (const l of leads) {
@@ -249,6 +253,10 @@ export async function POST(request: NextRequest) {
 
         const existing = await tx.label.findUnique({ where: { requestId: materialRequest.id } });
         if (existing) {
+          // Já impressa e sem forçar reimpressão → PULA (não re-enfileira).
+          if (existing.printStatus === "impresso" && !reprintPrinted) {
+            return { generated: false, deducted: false, alreadyPrinted: true };
+          }
           await tx.label.update({
             where: { id: existing.id },
             data: { content: renderLabelText(labelInput), printStatus: "pendente", printedAt: null, errorMessage: null },
@@ -296,7 +304,10 @@ export async function POST(request: NextRequest) {
         return { generated: true, deducted };
       });
 
-      if (!outcome.generated) {
+      if (outcome.alreadyPrinted) {
+        alreadyPrinted++;
+        results.push({ kommoLeadId: l.kommoLeadId, status: "ja_impresso" });
+      } else if (!outcome.generated) {
         incomplete++;
         results.push({ kommoLeadId: l.kommoLeadId, status: "campos_incompletos", missingFields });
       } else {
@@ -316,8 +327,8 @@ export async function POST(request: NextRequest) {
 
   return withCors(
     NextResponse.json({
-      generated, incomplete, duplicates,
-      total: generated + incomplete + duplicates, stockDeducted, results,
+      generated, incomplete, duplicates, alreadyPrinted,
+      total: generated + incomplete + duplicates + alreadyPrinted, stockDeducted, results,
     }),
     origin,
   );
