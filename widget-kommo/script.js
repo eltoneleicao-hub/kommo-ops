@@ -864,10 +864,12 @@ define(['jquery'], function ($) {
       if (!_lastManual.length) return;
       var sub = '';
       try { sub = self.system().subdomain; } catch (e) {}
-      var header = ['Lead ID', 'Nome', 'Bairro', 'Sugestão região', 'Motivo', 'Link Kommo'];
+      var header = ['Lead ID', 'Nome', 'Bairro', 'Endereço (Rua/Avenida)', 'Sugestão região', 'Motivo', 'Link Kommo'];
       var rows = _lastManual.map(function (m) {
         var link = sub ? ('https://' + sub + '.kommo.com/leads/detail/' + m.id) : '';
-        return [m.id, m.name || '', m.bairro || '', m.sugestao || '', m.motivo || '', link];
+        // endereço cru numa célula só (troca quebras de linha por " | " p/ ler no Excel)
+        var end = String(m.endereco || '').replace(/[\r\n]+/g, ' | ').trim();
+        return [m.id, m.name || '', m.bairro || '', end, m.sugestao || '', m.motivo || '', link];
       });
       downloadCsv('leads-sem-regiao.csv', header, rows);
     }
@@ -1002,15 +1004,15 @@ define(['jquery'], function ($) {
                 results.forEach(function (r) {
                   var info = meta[String(r.id)] || { name: 'Lead ' + r.id, bairro: '' };
                   if (!r.regiao) {
-                    manual.push({ id: r.id, name: info.name, bairro: info.bairro || '', sugestao: '',
+                    manual.push({ id: r.id, name: info.name, bairro: info.bairro || '', endereco: info.endereco || '', sugestao: '',
                       motivo: 'sem região — bairro "' + (info.bairro || '—') + '"' });
                   } else if (r.confidence === 'baixa') {
-                    manual.push({ id: r.id, name: info.name, bairro: info.bairro || '', sugestao: r.regiao,
+                    manual.push({ id: r.id, name: info.name, bairro: info.bairro || '', endereco: info.endereco || '', sugestao: r.regiao,
                       motivo: 'divisa/incerto → sugestão ' + r.regiao });
                   } else {
                     var values = buildRegionValues(field, r.regiao);
                     if (!values) {
-                      manual.push({ id: r.id, name: info.name, bairro: info.bairro || '', sugestao: r.regiao,
+                      manual.push({ id: r.id, name: info.name, bairro: info.bairro || '', endereco: info.endereco || '', sugestao: r.regiao,
                         motivo: 'sem opção "' + r.regiao + '" no dropdown' });
                     } else {
                       toWrite.push({ id: Number(r.id) || r.id,
@@ -1043,7 +1045,7 @@ define(['jquery'], function ($) {
                       fail += chunk.length;
                       chunk.forEach(function (c) {
                         var mi = meta[String(c.id)] || { name: 'Lead ' + c.id, bairro: '' };
-                        manual.push({ id: c.id, name: mi.name, bairro: mi.bairro || '', sugestao: '',
+                        manual.push({ id: c.id, name: mi.name, bairro: mi.bairro || '', endereco: mi.endereco || '', sugestao: '',
                           motivo: 'falha no lote (HTTP ' + xhr.status + ')' });
                       });
                       nextChunk();
