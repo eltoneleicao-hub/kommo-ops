@@ -51,6 +51,8 @@ const payloadSchema = z.object({
   // false (padrão): NÃO re-enfileira etiquetas já "impresso" — re-rodar o lote
   // imprime só as novas/corrigidas. true: força reimpressão das já impressas.
   reprintPrinted: z.boolean().optional().default(false),
+  // true: gera etiqueta mesmo com campos faltando (imprimir não-elegíveis).
+  forceIncomplete: z.boolean().optional().default(false),
   leads: z.array(leadSchema).min(1).max(500),
 });
 
@@ -92,7 +94,7 @@ export async function POST(request: NextRequest) {
     return withCors(NextResponse.json({ error: "unauthorized" }, { status: 401 }), origin);
   }
 
-  const { deductStock, validateOnly, reprintPrinted } = parsed.data;
+  const { deductStock, validateOnly, reprintPrinted, forceIncomplete } = parsed.data;
   const leads = parsed.data.leads.map(sanitizeLead);
 
   // ── Deduplicação ──────────────────────────────────────────────────────────
@@ -247,7 +249,9 @@ export async function POST(request: NextRequest) {
           update: data,
         });
 
-        if (missingFields.length > 0) {
+        // Campos faltando → não gera, A MENOS que forceIncomplete (imprime com o
+        // que tiver: a etiqueta pula as linhas vazias).
+        if (missingFields.length > 0 && !forceIncomplete) {
           return { generated: false, deducted: false };
         }
 

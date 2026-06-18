@@ -193,6 +193,8 @@ define(['jquery'], function ($) {
     // impressas (só novas/corrigidas) ou reimprimir TUDO. 1ª etapa da dupla
     // confirmação — a 2ª é o modal de confirmação final.
     var _pendingBatch = null;
+    var _lastById = null;        // byId do último lote lido (p/ imprimir não elegíveis)
+    var _ineligibleIds = [];     // ids dos não elegíveis do seletor atual
     function showReprintChoice(ids, byId) {
       _pendingBatch = { ids: ids, byId: byId };
       var $modal = $('#ge-modal');
@@ -441,6 +443,14 @@ define(['jquery'], function ($) {
         '⬇️ CSV não elegíveis (' + n + ')</button>';
     }
 
+    // Botão p/ FORÇAR a impressão dos não elegíveis (gera com o que tiver).
+    function ineligiblePrintButton(n) {
+      if (!n) return '';
+      return '<button id="ge-print-ineligible" style="padding:3px 8px;background:#FB8C00;color:#fff;' +
+        'border:none;border-radius:4px;font-size:11px;font-weight:700;cursor:pointer;margin-left:4px">' +
+        '🖨️ Imprimir não elegíveis (' + n + ')</button>';
+    }
+
     // Modal de SELEÇÃO de leads (checkboxes). Usado por Lote e Lote por Região.
     function showLeadSelection(title, leads, onConfirm) {
       var $modal = $('#ge-modal');
@@ -451,11 +461,12 @@ define(['jquery'], function ($) {
       var ineligibles = leads.filter(function (l) { return !l.eligible; });
       var dups = leads.filter(function (l) { return l.eligible && l.duplicate; });
       _lastIneligible = ineligibles;
+      _ineligibleIds = ineligibles.map(function (l) { return String(l.kommoLeadId); });
 
       if (!eligibles.length) {
         $modal.find('#ge-modal-body').html(
           '<div style="font-size:12px;color:#999;margin-bottom:8px">Nenhum lead elegível (todos com campos faltando).</div>' +
-          ineligibleCsvButton(ineligibles.length)
+          ineligibleCsvButton(ineligibles.length) + ineligiblePrintButton(ineligibles.length)
         );
         $modal.find('#ge-modal-confirm').hide();
         $modal.find('#ge-csv-ineligible').off('click').on('click', exportIneligibleCsv);
@@ -483,8 +494,8 @@ define(['jquery'], function ($) {
         '<label style="display:flex;gap:6px;align-items:center;font-size:12px;font-weight:700;margin-bottom:6px;cursor:pointer">' +
           '<input type="checkbox" id="ge-sel-all" checked> Selecionar todos (' + eligibles.length + ' elegíveis)</label>' +
         (ineligibles.length
-          ? '<div style="margin-bottom:6px">' + ineligibleCsvButton(ineligibles.length) +
-            ' <small style="color:#999">' + ineligibles.length + ' sem etiqueta (campos faltando)</small></div>'
+          ? '<div style="margin-bottom:6px">' + ineligibleCsvButton(ineligibles.length) + ineligiblePrintButton(ineligibles.length) +
+            '<div style="font-size:11px;color:#999;margin-top:3px">' + ineligibles.length + ' sem etiqueta (campos faltando)</div></div>'
           : '') +
         (dups.length
           ? '<div style="margin-bottom:6px;font-size:11px;color:#FF9800">⧉ ' + dups.length + ' duplicado(s) — mesmo destinatário de outro lead, não imprime 2x</div>'
@@ -636,6 +647,7 @@ define(['jquery'], function ($) {
                 if (rec && rec.internalOrderNotes) ml.regiao = rec.internalOrderNotes; // região do campo
               });
               var title = region ? ('🗺️ Lote — ' + region) : '📦 Gerar Lote';
+              _lastById = byId;
               showLeadSelection(title, validated, function (ids) { showReprintChoice(ids, byId); });
             });
           });
@@ -646,7 +658,7 @@ define(['jquery'], function ($) {
     }
 
     // Gera etiqueta dos leads selecionados, em chunks (seguro p/ timeout e estoque).
-    function doBatchSelected(ids, recordsById, reprintPrinted) {
+    function doBatchSelected(ids, recordsById, reprintPrinted, forceIncomplete) {
       var payloads = ids.map(function (id) { return recordsById[String(id)]; }).filter(Boolean);
       if (!payloads.length) return;
       var CH = 40, idx = 0, gen = 0, inc = 0, ded = 0, dup = 0, alr = 0;
@@ -675,7 +687,7 @@ define(['jquery'], function ($) {
           url: apiBase() + '/api/kommo/requests-batch-direct',
           method: 'POST',
           contentType: 'application/json',
-          data: JSON.stringify({ secret: cfg().api_key, deductStock: true, reprintPrinted: !!reprintPrinted, leads: chunk }),
+          data: JSON.stringify({ secret: cfg().api_key, deductStock: true, reprintPrinted: !!reprintPrinted, forceIncomplete: !!forceIncomplete, leads: chunk }),
           success: function (data) {
             gen += (data.generated || 0); inc += (data.incomplete || 0); ded += (data.stockDeducted || 0); dup += (data.duplicates || 0); alr += (data.alreadyPrinted || 0);
             next();
@@ -1388,6 +1400,16 @@ define(['jquery'], function ($) {
           })
           .on('click.ge', '#ge-btn-setregion-batch', function () {
             showSetRegionBatchChoice();
+          })
+          .on('click.ge', '#ge-print-ineligible', function () {
+            if (!_ineligibleIds.length || !_lastById) return;
+            var ids = _ineligibleIds.slice();
+            $('#ge-modal').css('display', 'none');
+            showModal(
+              '🖨️ Imprimir não elegíveis?',
+              'Vai gerar etiqueta de <b>' + ids.length + '</b> lead(s) <b style="color:#FB8C00">com campos faltando</b> — sai com o que tiver (linhas vazias são puladas) e deduz estoque. Confirmar?',
+              function () { doBatchSelected(ids, _lastById, false, true); }
+            );
           })
           .on('click.ge', '.ge-reprint-mode', function () {
             var reprintAll = String($(this).attr('data-mode')) === 'all';
