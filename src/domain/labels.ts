@@ -12,14 +12,13 @@ export type LabelInput = {
   internalOrderNotes?: string | null;
 };
 
+// Exigência MÍNIMA p/ etiqueta: nome + algum endereço + região. Número/bairro/
+// CEP/cidade NÃO são obrigatórios — muitos leads trazem tudo num bloco de texto
+// livre no campo "Rua/Avenida" que o parser não separa em campos discretos; a
+// etiqueta renderiza o bloco como está. (telefone removido em 2026-06-17.)
 const requiredFields: Array<[keyof LabelInput, string]> = [
   ["recipientName", "nome do destinatario"],
-  // telefone NÃO é mais obrigatório nem impresso (decisão 2026-06-17)
   ["street", "Rua/Avenida"],
-  ["number", "Numero"],
-  ["neighborhood", "Bairro"],
-  ["postalCode", "CEP"],
-  ["city", "Cidade"],
   ["internalOrderNotes", "Região"],
 ];
 

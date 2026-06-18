@@ -102,11 +102,25 @@ export function renderLabelZPL(input: LabelInput): string {
     });
   };
 
-  pushField(recipientName, 40, 12);              // destinatário (destaque)
-  pushField(`${street}, ${number}`, 28, 8);
+  // Achata blocos de endereço (quebras de linha / "|" viram ", ") e colapsa
+  // vírgulas repetidas — muitos leads trazem TODO o endereço no campo Rua/Avenida.
+  const flat = (s: string) =>
+    s.replace(/[\r\n|]+/g, ", ")
+      .replace(/\s+/g, " ")
+      .replace(/\s+,/g, ",")          // tira espaço antes de vírgula (vinha de " | ")
+      .replace(/(?:,\s*){2,}/g, ", ") // colapsa vírgulas repetidas
+      .replace(/^[,\s]+|[,\s]+$/g, "")
+      .trim();
+
+  // Só anexa o número se ele já não estiver dentro do bloco da rua (evita duplicar).
+  const streetLine = flat(number && !street.includes(number) ? `${street}, ${number}` : street);
+  const cityCep = flat([city, postalCode].filter(Boolean).join(" - "));
+
+  pushField(recipientName, 40, 12);                  // destinatário (destaque)
+  if (streetLine) pushField(streetLine, 28, 8, 3);   // rua (pode conter o bloco todo → até 3 linhas)
   if (complement) pushField(complement, 26, 8);
-  pushField(neighborhood, 28, 8);
-  pushField(`${city} - ${postalCode}`, 28, 8);
+  if (neighborhood) pushField(neighborhood, 28, 8);  // pula se vazio
+  if (cityCep) pushField(cityCep, 28, 8);            // pula se vazio
   // tira o prefixo "REGIAO " redundante (campo do Kommo às vezes é "Região Sul")
   pushField(`REGIAO: ${internalOrderNotes.replace(/^REGIAO\s+/, "")}`, 22, 0);
 
