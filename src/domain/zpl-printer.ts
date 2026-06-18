@@ -116,13 +116,14 @@ export function renderLabelZPL(input: LabelInput): string {
   const streetLine = flat(number && !street.includes(number) ? `${street}, ${number}` : street);
   const cityCep = flat([city, postalCode].filter(Boolean).join(" - "));
 
-  pushField(recipientName, 40, 12);                  // destinatário (destaque)
+  if (recipientName) pushField(recipientName, 40, 12); // destinatário (pula se vazio)
   if (streetLine) pushField(streetLine, 28, 8, 3);   // rua (pode conter o bloco todo → até 3 linhas)
   if (complement) pushField(complement, 26, 8);
   if (neighborhood) pushField(neighborhood, 28, 8);  // pula se vazio
   if (cityCep) pushField(cityCep, 28, 8);            // pula se vazio
-  // tira o prefixo "REGIAO " redundante (campo do Kommo às vezes é "Região Sul")
-  pushField(`REGIAO: ${internalOrderNotes.replace(/^REGIAO\s+/, "")}`, 22, 0);
+  // REGIAO só quando há valor (tira o prefixo "REGIAO " redundante do campo).
+  const regiao = internalOrderNotes.replace(/^REGIAO\s+/, "");
+  if (regiao) pushField(`REGIAO: ${regiao}`, 22, 0);
 
   const totalH = lines.reduce((sum, l) => sum + l.h + l.gap, 0);
   // Y inicial centraliza o bloco; nunca sobe acima de 12 dots.
