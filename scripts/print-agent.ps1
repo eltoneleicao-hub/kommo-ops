@@ -158,11 +158,14 @@ function Test-PrinterReady {
   return $true
 }
 
-# Envia UMA etiqueta e só retorna quando o Windows confirma que o job concluiu
-# SEM erro/pausa. Lança exceção em qualquer não-confirmação (driver corrompido,
-# sem papel/ribbon, tampa aberta, offline, ou timeout) — o chamador marca ERRO,
-# nunca "impresso" fantasma. Limite: se o driver descartar os bytes sem reportar
-# estado, a fila esvazia e isto retorna OK mesmo sem papel (ver cabeçalho).
+# Envia UMA etiqueta e só retorna quando o job SAI da fila (foi processado) sem
+# erro. Detecta falha real por: impressora OFFLINE, JobStatus de erro/pausa, ou
+# TIMEOUT (job preso). NÃO trata Size=0 como falha — jobs RAW na Zebra passam por
+# Size=0 transitório (pass-through) antes de imprimir, e matar o job nesse
+# instante (bug anterior) ABORTAVA impressões boas. O chamador marca ERRO em
+# qualquer exceção — nunca "impresso" fantasma. Limite conhecido: se o driver
+# descartar os bytes sem reportar estado, a fila esvazia e isto retorna OK mesmo
+# sem papel (ver cabeçalho) — só leitura bidirecional (~HS) fecharia isso.
 function Send-OneAndConfirm {
   param([string]$Zpl, [int]$TimeoutSec = 25)
 
@@ -171,24 +174,24 @@ function Send-OneAndConfirm {
               Select-Object -ExpandProperty Id)
 
   $bytes = [System.Text.Encoding]::UTF8.GetBytes($Zpl)
+  $sent = Get-Date
   [RawPrinter]::SendBytes($PrinterName, $bytes)
 
-  $deadline = (Get-Date).AddSeconds($TimeoutSec)
+  $deadline = $sent.AddSeconds($TimeoutSec)
   $appeared = $false
   while ((Get-Date) -lt $deadline) {
-    Start-Sleep -Milliseconds 400
-    $jobs = @(Get-PrintJob -PrinterName $PrinterName -ErrorAction SilentlyContinue)
+    Start-Sleep -Milliseconds 500
 
-    # Job preso com Size=0 => driver ZDesigner corrompido.
-    $z = @($jobs | Where-Object { $_.Size -eq 0 })
-    if ($z.Count -gt 0) {
-      $z | Remove-PrintJob -ErrorAction SilentlyContinue
-      throw "Job preso na fila (Size=0) — driver ZDesigner corrompido. Reinstale o driver."
+    # Impressora caiu p/ OFFLINE no meio (desligou / USB solto / travou) => não saiu.
+    $wmi = Get-CimInstance Win32_Printer -Filter "Name='$PrinterName'" -ErrorAction SilentlyContinue
+    if ($wmi -and $wmi.WorkOffline) {
+      throw "Impressora ficou OFFLINE durante a impressao — etiqueta nao saiu."
     }
 
-    # Estado de erro/pausa/intervenção => a impressora NÃO concluiu (sem papel,
-    # ribbon, tampa aberta, offline...). Não marca impresso.
-    $bad = @($jobs | Where-Object { "$($_.JobStatus)" -match "Error|Paused|Blocked|Offline|PaperOut|UserIntervention|Deleting" })
+    $jobs = @(Get-PrintJob -PrinterName $PrinterName -ErrorAction SilentlyContinue)
+
+    # Erro/pausa/intervenção no job => NÃO concluiu (sem papel, ribbon, tampa...).
+    $bad = @($jobs | Where-Object { "$($_.JobStatus)" -match "Error|Paused|Blocked|PaperOut|UserIntervention" })
     if ($bad.Count -gt 0) {
       $st = (($bad | ForEach-Object { "$($_.JobStatus)" }) | Select-Object -Unique) -join ", "
       $bad | Remove-PrintJob -ErrorAction SilentlyContinue
@@ -196,12 +199,25 @@ function Send-OneAndConfirm {
     }
 
     $mine = @($jobs | Where-Object { $before -notcontains $_.Id })
-    if ($mine.Count -gt 0) { $appeared = $true }
-
-    # Concluiu: fila vazia, ou o job desta etiqueta apareceu e já saiu.
-    if ($jobs.Count -eq 0 -or ($appeared -and $mine.Count -eq 0)) { return }
+    if ($mine.Count -gt 0) {
+      $appeared = $true
+      # Impresso mas retido na fila (config "manter documentos impressos") => OK.
+      if (@($mine | Where-Object { "$($_.JobStatus)" -match "Printed|Complete" }).Count -gt 0) {
+        $mine | Remove-PrintJob -ErrorAction SilentlyContinue
+        return
+      }
+    }
+    # Sucesso: o job apareceu e já saiu da fila, OU a fila esvaziou, OU a impressão
+    # foi rápida demais p/ aparecer (>2s sem job e sem erro).
+    elseif ($appeared -or ((Get-Date) -gt $sent.AddSeconds(2))) {
+      return
+    }
   }
-  throw "Tempo esgotado ($TimeoutSec s) sem confirmar a saida da etiqueta."
+
+  # Timeout: o job ficou preso na fila (impressora travada / driver corrompido).
+  @(Get-PrintJob -PrinterName $PrinterName -ErrorAction SilentlyContinue |
+    Where-Object { $before -notcontains $_.Id }) | Remove-PrintJob -ErrorAction SilentlyContinue
+  throw "Tempo esgotado ($TimeoutSec s) sem o job sair da fila — impressora travada ou driver ZDesigner corrompido."
 }
 
 # ── Chamadas HTTP ─────────────────────────────────────────────────────────────
