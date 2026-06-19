@@ -252,43 +252,66 @@ function parseLabeledBlock(
     alameda: "Alameda", estrada: "Estrada", rodovia: "Rodovia", praca: "Praça",
   };
 
-  for (const line of lines) {
-    // (3) CEP (tolera espaço: "12226 -357")
-    const cepM = /cep\s*:?\s*(\d{5}\s*-?\s*\d{3})/i.exec(line);
-    if (cepM && !result.postalCode) {
-      result.postalCode = normalizeCep(cepM[1].replace(/\s/g, ""));
-      continue;
+  // Helpers ASCII-safe (literais não-ASCII via \u — evita bug de minificação Vercel)
+  const stripAccents = (s: string) => s.normalize("NFD").replace(/[̀-ͯ]/g, "");
+  const VIA_START = /^(rua|r\.|av|av\.|avenida|travessa|tv|alameda|al|estrada|rod|rodovia|pra.a)\b/i;
+  const GENERIC_LOG = new Set(["ruaav", "ruaavenida", "logradouro", "endereco", "end"]);
+
+  for (const lineRaw of lines) {
+    const line = lineRaw.replace(/^[-*]+\s*/, "").trim(); // tira bullet "- "/"* "
+    if (!line) continue;
+
+    // separa "rótulo: valor" (rótulo = texto curto antes do 1º ":")
+    const ci = line.indexOf(":");
+    const hasLabel = ci > 0 && ci <= 16;
+    const label = hasLabel ? stripAccents(line.slice(0, ci).toLowerCase()).replace(/[./ ]/g, "") : "";
+    const value = hasLabel ? line.slice(ci + 1).trim() : line;
+
+    // CEP — rótulo "cep" OU linha que é só um CEP (tolera dots/espaços: "12.242.840")
+    if (label.startsWith("cep") || (!hasLabel && /^\d[\d.\s-]{6,}\d$/.test(line))) {
+      const d = (hasLabel ? value : line).replace(/\D/g, "");
+      if (d.length >= 8 && !result.postalCode) { result.postalCode = d.slice(0, 8); continue; }
     }
 
     // Bairro (pode trazer cidade após " - ")
-    const bairroM = /bairro\s*:?\s*(.+)/i.exec(line);
-    if (bairroM && !result.neighborhood) {
-      const parts = bairroM[1].split(/\s*[-–]\s*/);
+    if (label.startsWith("bairro") && !result.neighborhood) {
+      const parts = value.split(/\s*[-–]\s*/);
       result.neighborhood = parts[0].trim();
-      if (parts.length > 1) result.city = parts.slice(1).join(" - ").trim();
+      if (parts.length > 1 && !result.city) result.city = parts.slice(1).join(" - ").trim();
       continue;
     }
 
-    // Condomínio / Complemento → vão para complemento
-    const condoM = /(?:condom[ií]nio|complemento)\s*:?\s*(.+)/i.exec(line);
-    if (condoM) { complementParts.push(condoM[1].trim()); continue; }
+    // Cidade (rótulo próprio)
+    if (label.startsWith("cidade") && value && !result.city) { result.city = value; continue; }
 
-    // Logradouro: "Rua: Ana ... n° 75 - Casa"
-    const logM = /^(rua|avenida|av|travessa|alameda|estrada|rodovia|pra[cç]a)\.?\s*:?\s*(.+)/i.exec(line);
-    if (logM && !result.street) {
-      const tipo = logM[1].toLowerCase().replace("ç", "c");
-      let rest = logM[2].trim();
+    // Número em linha própria ("Número: 500")
+    if (/^(numero|num|n|no)$/.test(label) && !result.number) {
+      const nm = /(\d{1,6}[A-Za-z]?)/.exec(value);
+      if (nm) result.number = nm[1];
+      continue;
+    }
 
-      let numM = /(?:,\s*|[-–]\s*|n[º°ª]?\.?\s*)(\d{1,6}[A-Za-z]?)\b/i.exec(rest); // n° / nº / n. / n
+    // Apt / Apto / Complemento / Condomínio → complemento
+    if (/^(apt|apto|apartamento|compl|complemento|condom)/.test(label)) {
+      if (value) complementParts.push(value);
+      continue;
+    }
+
+    // Logradouro: rótulo de via ("Rua:", "Rua/Av:", "Avenida:") OU 1ª linha sem rótulo
+    const isViaLabel = /^(rua|av|avenida|travessa|alameda|estrada|rodovia|praca|logradouro|endereco|end)/.test(label);
+    if ((isViaLabel || (!hasLabel && !result.street)) && !result.street) {
+      let rest = value;
+      let numM = /(?:,\s*|[-–]\s*|n[º°ª]?\.?\s*)(\d{1,6}[A-Za-z]?)\b/i.exec(rest); // n°/nº/n./n
       if (!numM) numM = /\s(\d{1,6}[A-Za-z]?)\s*$/.exec(rest); // número no fim: "das Flores 100"
-      if (numM) {
+      if (numM && !result.number) {
         result.number = numM[1];
         const after = rest.slice(numM.index + numM[0].length).replace(/^[\s,\-–]+/, "").trim();
         if (after) complementParts.push(after);
         rest = rest.slice(0, numM.index).trim();
       }
-
-      const prefix = prefixMap[tipo] || "";
+      // Só prefixa o tipo de via p/ rótulo específico ("Rua:") quando o valor ainda
+      // não começa com um tipo de via (evita "Rua /Av: Avenida..." e duplicação).
+      const prefix = !GENERIC_LOG.has(label) && !VIA_START.test(rest) ? prefixMap[label] || "" : "";
       result.street = (prefix ? prefix + " " : "") + rest.replace(/[,\-–\s]+$/, "").trim();
       continue;
     }

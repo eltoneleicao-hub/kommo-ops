@@ -43,6 +43,50 @@ describe("label domain", () => {
     ]);
   });
 
+  it("região vazia mas bairro resolvível → elegível (auto-resolve, sem editar Kommo)", () => {
+    expect(validateLabelInput({
+      ...completeInput, internalOrderNotes: "",
+      neighborhood: "Bosque dos Eucaliptos", postalCode: "12233690",
+    })).toEqual([]);
+  });
+
+  it("região vazia e nada resolvível → falta Região", () => {
+    expect(validateLabelInput({
+      recipientName: "Ana", street: "Rua X", number: "1",
+      neighborhood: "", postalCode: "", city: "", internalOrderNotes: "",
+    })).toEqual(["Região"]);
+  });
+
+  it("frase no campo Rua (não é endereço) → falta Rua/Avenida", () => {
+    expect(validateLabelInput({
+      recipientName: "Ana",
+      street: "Confio plenamente na competencia como medico, nao e necessario sua visita.",
+      internalOrderNotes: "Sul",
+    })).toContain("Rua/Avenida");
+  });
+
+  it("'Não' / 'Ok' / pontuação no campo Rua não contam como endereço", () => {
+    for (const junk of ["Não", "Ok", ",", "A"]) {
+      expect(
+        validateLabelInput({ recipientName: "Ana", street: junk, internalOrderNotes: "Sul" }),
+      ).toContain("Rua/Avenida");
+    }
+  });
+
+  it("endereço real sem a palavra 'rua' (tem número) continua elegível", () => {
+    expect(validateLabelInput({
+      recipientName: "Ana", street: "Beira Rio 45", neighborhood: "Urbanova",
+      postalCode: "12244000", internalOrderNotes: "Oeste",
+    })).toEqual([]);
+  });
+
+  it("abreviação de via ('Estr.') é reconhecida como endereço (não flag)", () => {
+    expect(validateLabelInput({
+      recipientName: "Ana", street: "Estr. Dom José Antônio do Couto",
+      neighborhood: "Sao Francisco Xavier", internalOrderNotes: "Norte",
+    })).toEqual([]);
+  });
+
   it("bloco Origem/Destino: resolve região pelo DESTINO (Floresta=Leste), não pela Origem (Jardim América=Sul)", () => {
     const block = [
       "Origem:", "Rua Java, 174", "Ap 145", "Jardim América", "",
@@ -66,8 +110,28 @@ describe("label domain", () => {
         "Bosque dos eucaliptos",
         "Sao Jose dos Campos - CEP 12233690",
         "",
-        "REGIAO: REGIAO LESTE",
+        "REGIAO: LESTE",
       ].join("\n"),
     );
+  });
+
+  it("região auto-resolvida (campo Kommo vazio) IMPRIME na etiqueta", () => {
+    const out = renderLabelText({
+      recipientName: "Ana", street: "Rua Manoel Fiel Filho", number: "204",
+      neighborhood: "Bosque dos Eucaliptos", postalCode: "12233690",
+      city: "Sao Jose dos Campos", internalOrderNotes: "",
+    });
+    expect(out).toContain("REGIAO: Sul");
+    expect(out).not.toMatch(/REGIAO:\s*$/m); // nunca em branco quando elegível
+  });
+
+  it("balde 'Outras': renderLabelText mostra a cidade no lugar de 'REGIAO: OUTRAS'", () => {
+    const out = renderLabelText({
+      recipientName: "Ana", street: "Rua X", number: "10",
+      neighborhood: "Centro", city: "Jacarei", postalCode: "12300000",
+      internalOrderNotes: "Outras",
+    });
+    expect(out).toContain("JACAREI");
+    expect(out).not.toMatch(/REGIAO:\s*OUTRAS/i);
   });
 });

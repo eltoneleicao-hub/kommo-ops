@@ -175,6 +175,36 @@ describe("parseAddressField", () => {
     expect(comOrdinal.number).toBe("9");
   });
 
+  it("template de formulário (Rua/Av:, Número:, Apt:, Cep com pontos, Cidade:)", () => {
+    const raw = [
+      "Rua/Av: Avenida São João",
+      "Número:500",
+      "Apt:211 Torre A",
+      "Cep:12.242.840",
+      "Bairro: Jardim Esplanada",
+      "Cidade: São José dos Campos",
+    ].join("\n");
+    const r = parseAddressField(raw, {});
+    expect(r.street).toBe("Avenida São João");   // não duplica "Rua /Av:"
+    expect(r.number).toBe("500");
+    expect(r.postalCode).toBe("12242840");        // pontos do CEP limpos
+    expect(r.neighborhood).toBe("Jardim Esplanada");
+    expect(r.city).toBe("São José dos Campos");
+    expect(r.complement).toContain("211 Torre A");
+  });
+
+  it("template 'Rua/Av: rua Dom Luiz' não duplica prefixo de via", () => {
+    const r = parseAddressField(
+      ["Rua/Av: rua Dom Luiz", "Número:17", "Cep:12310036", "Bairro: pq dos principes", "Cidade: Jacareí"].join("\n"),
+      {},
+    );
+    expect(r.street).toBe("rua Dom Luiz");
+    expect(r.number).toBe("17");
+    expect(r.postalCode).toBe("12310036");
+    expect(r.neighborhood).toBe("pq dos principes");
+    expect(r.city).toBe("Jacareí");
+  });
+
   it("bloco rotulado sem 'Destino:' (rótulos diretos)", () => {
     const raw = [
       "Rua: das Flores 100",

@@ -52,6 +52,46 @@ describe("renderLabelZPL — nome longo", () => {
   });
 });
 
+describe("renderLabelZPL — balde 'Outras' (fora de SJC) mostra a CIDADE, nunca 'REGIAO: OUTRAS'", () => {
+  it("usa o campo Cidade quando preenchido", () => {
+    const zpl = renderLabelZPL({
+      recipientName: "Ana", street: "Rua X", number: "10",
+      neighborhood: "Centro", city: "Jacarei", postalCode: "12300000",
+      internalOrderNotes: "Outras", recipientPhone: "",
+    });
+    expect(zpl).toContain("^FDJACAREI^FS");
+    expect(zpl).not.toContain("OUTRAS");
+  });
+
+  it("extrai a cidade do endereço em texto livre quando não há campo Cidade", () => {
+    const zpl = renderLabelZPL({
+      recipientName: "Ana",
+      street: "Rua das Flores 100, Centro, Cacapava - SP",
+      internalOrderNotes: "Outras", recipientPhone: "",
+    });
+    expect(zpl).toContain("CACAPAVA");
+    expect(zpl).not.toContain("OUTRAS");
+  });
+
+  it("cai para 'FORA DE SJC' quando a cidade é desconhecida", () => {
+    const zpl = renderLabelZPL({
+      recipientName: "Ana", street: "Travessa Sem Nome 1",
+      internalOrderNotes: "Outras", recipientPhone: "",
+    });
+    expect(zpl).toContain("FORA DE SJC");
+    expect(zpl).not.toContain("OUTRAS");
+  });
+
+  it("região normal de SJC continua imprimindo 'REGIAO: X'", () => {
+    const zpl = renderLabelZPL({
+      recipientName: "Ana", street: "Rua X", number: "1",
+      neighborhood: "Centro", city: "SJC", postalCode: "12200000",
+      internalOrderNotes: "Leste", recipientPhone: "",
+    });
+    expect(zpl).toContain("^FDREGIAO: LESTE^FS");
+  });
+});
+
 describe("renderLabelZPL — campos longos quebram (não só o nome)", () => {
   it("rua/bairro longos quebram em 2 linhas em vez de cortar na borda", () => {
     const zpl = renderLabelZPL({
@@ -109,5 +149,92 @@ describe("renderLabelZPL — campos longos quebram (não só o nome)", () => {
     const fds = [...zpl.matchAll(/\^FD([^]*?)\^FS/g)].map((m) => m[1]);
     expect(fds.every((t) => !t.includes("\n"))).toBe(true); // sem quebra crua no campo
     expect(zpl).not.toMatch(/\^FD\s*,/);         // sem linha começando com vírgula órfã
+  });
+});
+
+describe("renderLabelZPL — robustez (anti-quebra ZPL e anti-misroute)", () => {
+  it("neutraliza ^ e ~ no texto (lead não injeta comando ZPL)", () => {
+    const zpl = renderLabelZPL({
+      recipientName: "Ana ^FO~JK Maria", street: "Rua A", number: "1",
+      neighborhood: "Centro", city: "SJC", postalCode: "12200000",
+      internalOrderNotes: "Sul", recipientPhone: "",
+    });
+    const fds = [...zpl.matchAll(/\^FD([^]*?)\^FS/g)].map((m) => m[1]);
+    fds.forEach((t) => {
+      expect(t.includes("^")).toBe(false);
+      expect(t.includes("~")).toBe(false);
+    });
+    expect(zpl).toContain("ANA FO JK MARIA");
+  });
+
+  it("anti-misroute: região é zona de SJC mas cidade é de fora → mostra a cidade", () => {
+    const zpl = renderLabelZPL({
+      recipientName: "Ana", street: "Rua X", number: "10",
+      neighborhood: "Centro", city: "Cacapava", postalCode: "12280000",
+      internalOrderNotes: "Sul", recipientPhone: "",
+    });
+    expect(zpl).toContain("CACAPAVA");
+    expect(zpl).not.toContain("REGIAO: SUL");
+  });
+
+  it("cidade de SJC mantém a região normal (não dispara o guarda)", () => {
+    const zpl = renderLabelZPL({
+      recipientName: "Ana", street: "Rua X", number: "10",
+      neighborhood: "Centro", city: "Sao Jose dos Campos", postalCode: "12200000",
+      internalOrderNotes: "Sul", recipientPhone: "",
+    });
+    expect(zpl).toContain("REGIAO: SUL");
+  });
+});
+
+describe("renderLabelZPL — CEP normalizado", () => {
+  it("formata CEP de 8 dígitos como 00000-000", () => {
+    const zpl = renderLabelZPL({
+      recipientName: "Ana", street: "Rua X", number: "1", neighborhood: "Centro",
+      city: "SJC", postalCode: "12200000", internalOrderNotes: "Sul", recipientPhone: "",
+    });
+    expect(zpl).toContain("12200-000");
+  });
+
+  it("limpa pontuação do CEP e formata quando dá 8 dígitos", () => {
+    const zpl = renderLabelZPL({
+      recipientName: "Ana", street: "Rua X", number: "1", neighborhood: "Centro",
+      city: "SJC", postalCode: "12235.649", internalOrderNotes: "Sul", recipientPhone: "",
+    });
+    expect(zpl).toContain("12235-649");
+    expect(zpl).not.toContain("12235.649");
+  });
+
+  it("CEP malformado (≠8 díg.) imprime só os dígitos, sem lixo", () => {
+    const zpl = renderLabelZPL({
+      recipientName: "Ana", street: "Rua X", number: "1", neighborhood: "Centro",
+      city: "SJC", postalCode: "12235.62", internalOrderNotes: "Sul", recipientPhone: "",
+    });
+    expect(zpl).toContain("1223562");
+    expect(zpl).not.toContain("12235.62");
+  });
+});
+
+describe("renderLabelZPL — região auto-resolvida (lead sem o campo Região)", () => {
+  it("resolve do bairro e imprime REGIAO: X sem o campo preenchido", () => {
+    const zpl = renderLabelZPL({
+      recipientName: "Ana", street: "Rua X", number: "1",
+      neighborhood: "Bosque dos Eucaliptos", postalCode: "12233690",
+      city: "Sao Jose dos Campos", internalOrderNotes: "", recipientPhone: "",
+    });
+    expect(zpl).toContain("REGIAO: SUL");
+  });
+});
+
+describe("renderLabelZPL — campo Rua que não é endereço", () => {
+  it("frase no campo Rua não vira linha de logradouro na etiqueta", () => {
+    const zpl = renderLabelZPL({
+      recipientName: "Ana",
+      street: "Confio plenamente na competencia, nao e necessario sua visita.",
+      neighborhood: "Centro", city: "SJC", postalCode: "12200000",
+      internalOrderNotes: "Sul", recipientPhone: "",
+    });
+    expect(zpl).not.toContain("CONFIO");
+    expect(zpl).toContain("REGIAO: SUL");
   });
 });

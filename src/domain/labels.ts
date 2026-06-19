@@ -1,5 +1,6 @@
 import { parseAddressField } from "./address-parser";
 import { toAsciiText } from "./encoding";
+import { cityForOutras, resolveRegion, resolveRegionFromText } from "./region-resolver";
 
 /**
  * Assinatura de DEDUPLICAÇÃO de uma etiqueta: identifica o mesmo destinatário
@@ -29,15 +30,10 @@ export type LabelInput = {
   internalOrderNotes?: string | null;
 };
 
-// Exigência MÍNIMA p/ etiqueta: nome + algum endereço + região. Número/bairro/
-// CEP/cidade NÃO são obrigatórios — muitos leads trazem tudo num bloco de texto
-// livre no campo "Rua/Avenida" que o parser não separa em campos discretos; a
-// etiqueta renderiza o bloco como está. (telefone removido em 2026-06-17.)
-const requiredFields: Array<[keyof LabelInput, string]> = [
-  ["recipientName", "nome do destinatario"],
-  ["street", "Rua/Avenida"],
-  ["internalOrderNotes", "Região"],
-];
+// Exigência MÍNIMA p/ etiqueta: nome + endereço (Rua/Avenida) + região. A região
+// pode vir do campo internalOrderNotes OU ser RESOLVIDA do bairro/CEP/endereço
+// (ver effectiveRegion) — assim leads SEM o campo preenchido no Kommo ainda
+// imprimem, sem editar o Kommo. (telefone removido em 2026-06-17.)
 
 function clean(value: string | null | undefined): string {
   return String(value ?? "").trim();
@@ -73,13 +69,54 @@ export function normalizeAddressInput(input: LabelInput): LabelInput {
   return input;
 }
 
-export function validateLabelInput(input: LabelInput): string[] {
-  // Primeiro normaliza o endereço
-  const normalized = normalizeAddressInput(input);
+/** Região efetiva: usa o campo internalOrderNotes se preenchido; senão RESOLVE do
+ *  bairro/CEP/endereço. "" quando não dá p/ determinar com confiança (baixa). */
+export function effectiveRegion(input: LabelInput): string {
+  // prefixo "Regiao "/"Região " (o "." casa a/ã sem literal não-ASCII — evita
+  // o bug de minificação da Vercel com chars acentuados no source)
+  const field = clean(input.internalOrderNotes).replace(/^regi.o\s+/i, "");
+  if (field) return field;
+  const byBairro = resolveRegion(input.neighborhood, input.postalCode);
+  const best = byBairro.regiao ? byBairro : resolveRegionFromText(input.street, input.postalCode);
+  return best.regiao && best.confidence !== "baixa" ? best.regiao : "";
+}
 
-  return requiredFields
-    .filter(([key]) => clean(normalized[key]).length === 0)
-    .map(([, label]) => label);
+/** O texto PARECE um endereço? (tem tipo de via, CEP, número de imóvel ou rótulo).
+ *  Tokens curtos/ambíguos ("via","pq","jd") ficam DE FORA de propósito p/ não dar
+ *  falso-positivo de endereço em texto casual. */
+export function isAddressLike(text: string | null | undefined): boolean {
+  const t = String(text ?? "");
+  if (!t.trim()) return false;
+  if (/\b(rua|r\.|av|av\.|avenida|travessa|trav|alameda|estrada|estr|rodovia|rod|pra.a|condom|condominio|jardim|parque|vila|residencial|bairro|cep|numero|n.mero|logradouro|endere.o|loteamento|chacara)\b/i.test(t)) return true;
+  if (/\d{5}-?\d{3}/.test(t)) return true;                              // CEP
+  if (/(?:^|[\s,;-])\d{1,5}[A-Za-z]?(?:[\s,;]|$)/.test(t)) return true; // número de imóvel
+  return false;
+}
+
+/** Detecta valor do campo Rua que NÃO é endereço (frase/mensagem, "Ok", "Não",
+ *  pontuação solta). CONSERVADOR: só acusa quando não há NENHUM sinal de endereço,
+ *  pra nunca rejeitar um endereço real (preferimos imprimir a deixar de imprimir). */
+export function isNonAddress(text: string | null | undefined): boolean {
+  const t = String(text ?? "").trim();
+  if (!t) return false;                  // vazio = "faltando" tratado em outro lugar
+  if (isAddressLike(t)) return false;
+  const ascii = t.normalize("NFD").replace(/[̀-ͯ]/g, "");
+  const norm = ascii.toLowerCase().replace(/[^a-z0-9 ]/g, " ").replace(/\s+/g, " ").trim();
+  const JUNK = new Set(["nao", "nao sei", "naosei", "ok", "sim", "nada", "teste", "test", "x", "xx", "xxx", "asd", "na", "aaa"]);
+  if (JUNK.has(norm)) return true;
+  const letters = (ascii.match(/[a-z]/gi) || []).length;
+  if (t.length < 4 || letters < 3) return true;                  // "Ok", "A", ",", "Nao"
+  if (t.split(/\s+/).length >= 6 || t.includes("?")) return true; // frase/mensagem
+  return false;                          // ambíguo curto → mantém (conservador)
+}
+
+export function validateLabelInput(input: LabelInput): string[] {
+  const normalized = normalizeAddressInput(input);
+  const missing: string[] = [];
+  if (!clean(normalized.recipientName)) missing.push("nome do destinatario");
+  if (!clean(normalized.street) || isNonAddress(normalized.street)) missing.push("Rua/Avenida");
+  if (!effectiveRegion(normalized)) missing.push("Região");
+  return missing;
 }
 
 export function renderLabelText(input: LabelInput): string {
@@ -97,11 +134,21 @@ export function renderLabelText(input: LabelInput): string {
     lines.push(complement);
   }
 
+  // Região da etiqueta = a MESMA da elegibilidade (campo do Kommo OU resolvida do
+  // bairro/CEP/endereço). Sem isso, um lead que ficou elegível por auto-resolução
+  // sairia com "REGIAO:" em branco. effectiveRegion já remove o prefixo "Regiao ".
+  const regiaoVal = effectiveRegion(normalized);
+  // Balde "Outras" (fora de SJC): mostra a CIDADE no lugar de "REGIAO: OUTRAS".
+  const addr = [normalized.street, normalized.neighborhood, normalized.complement].filter(Boolean).join(" ");
+  const lastLine = /^outras\b/i.test(regiaoVal)
+    ? (cityForOutras(normalized.city, addr) || "FORA DE SJC").toUpperCase()
+    : `REGIAO: ${regiaoVal}`;
+
   lines.push(
     clean(normalized.neighborhood),
     `${clean(normalized.city)} - CEP ${clean(normalized.postalCode)}`,
     "",
-    `REGIAO: ${clean(normalized.internalOrderNotes).replace(/^[Rr]egi[ãa]o\s+/, "")}`,
+    lastLine,
   );
 
   return lines.join("\n");

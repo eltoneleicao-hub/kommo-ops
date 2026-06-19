@@ -5,13 +5,25 @@
  * Zebra ZD220T (203 dpi)
  */
 
-import type { LabelInput } from "./labels";
+import { effectiveRegion, isNonAddress, type LabelInput } from "./labels";
 import { toAsciiText } from "./encoding";
+import { cityForOutras, detectNonSjcCity } from "./region-resolver";
 
 function clean(value: string | null | undefined): string {
   // Repara mojibake E translitera p/ ASCII (SAO JOSE) — robusto contra qualquer
   // encoding (fonte da Zebra, ^CI28, agente). Etiqueta de entrega não precisa de acento.
-  return toAsciiText(value).trim();
+  // Remove ^ e ~ (prefixos de comando do ZPL): se sobrarem no ^FD...^FS, o lead
+  // "injeta" comando e quebra/distorce a etiqueta silenciosamente.
+  // colapsa só espaços/tabs (preserva \n, que o flat() converte em ", " depois)
+  return toAsciiText(value).replace(/[\^~]/g, " ").replace(/[^\S\r\n]+/g, " ").trim();
+}
+
+// Normaliza o CEP p/ exibição: 8 dígitos → "00000-000"; senão, só os dígitos
+// (tira ".", espaços e lixo). Muitos leads vêm com CEP malformado: "12235.62",
+// "1229826" (7), "128300000" (9). Hand-delivery usa rua/bairro; CEP é reforço.
+function fmtCep(value: string): string {
+  const d = (value || "").replace(/\D/g, "");
+  return d.length === 8 ? `${d.slice(0, 5)}-${d.slice(5)}` : d;
 }
 
 /**
@@ -73,12 +85,12 @@ export function renderLabelZPL(input: LabelInput): string {
   const up = (value: string | null | undefined): string => clean(value).toUpperCase();
 
   const recipientName = up(input.recipientName);
-  const street = up(input.street);
+  // Rua que não é endereço (frase/"Ok"/"Não") → não imprime lixo como logradouro.
+  const street = isNonAddress(input.street) ? "" : up(input.street);
   const number = up(input.number);
   const neighborhood = up(input.neighborhood);
   const city = up(input.city);
   const postalCode = up(input.postalCode);
-  const internalOrderNotes = up(input.internalOrderNotes);
   const complement = up(input.complement);
 
   const X = 130;         // margem esquerda (dots) — afasta da borda p/ não cortar
@@ -114,16 +126,32 @@ export function renderLabelZPL(input: LabelInput): string {
 
   // Só anexa o número se ele já não estiver dentro do bloco da rua (evita duplicar).
   const streetLine = flat(number && !street.includes(number) ? `${street}, ${number}` : street);
-  const cityCep = flat([city, postalCode].filter(Boolean).join(" - "));
+  const cityCep = flat([city, fmtCep(postalCode)].filter(Boolean).join(" - "));
 
   if (recipientName) pushField(recipientName, 40, 12); // destinatário (pula se vazio)
   if (streetLine) pushField(streetLine, 28, 8, 3);   // rua (pode conter o bloco todo → até 3 linhas)
   if (complement) pushField(complement, 26, 8);
   if (neighborhood) pushField(neighborhood, 28, 8);  // pula se vazio
   if (cityCep) pushField(cityCep, 28, 8);            // pula se vazio
-  // REGIAO só quando há valor (tira o prefixo "REGIAO " redundante do campo).
-  const regiao = internalOrderNotes.replace(/^REGIAO\s+/, "");
-  if (regiao) pushField(`REGIAO: ${regiao}`, 22, 0);
+  // Linha de roteamento. Balde "Outras" (fora de SJC): NUNCA imprime "REGIAO:
+  // OUTRAS" — mostra a CIDADE de destino (campo Cidade ou extraída do endereço);
+  // cai p/ "FORA DE SJC" se a cidade for desconhecida. Demais regiões seguem
+  // "REGIAO: X" (tira o prefixo "REGIAO " redundante do campo).
+  // Região efetiva: campo do Kommo OU resolvida do bairro/CEP (effectiveRegion),
+  // p/ imprimir leads sem o campo Região preenchido sem editar o Kommo.
+  const regiao = up(effectiveRegion(input));
+  // Guarda anti-misroute: se a região é uma zona de SJC mas o campo CIDADE declara
+  // outra cidade (Jacareí, Caçapava, São Paulo...), NÃO confia na zona — trata como
+  // "Outras" e mostra a cidade real. O campo Região às vezes vem preenchido errado
+  // e o app não re-checava, mandando p/ um time de SJC algo que é de fora.
+  const cidadeFora = detectNonSjcCity(input.city);
+  if (/^OUTRAS\b/.test(regiao) || (regiao && cidadeFora)) {
+    const addr = [input.street, input.neighborhood, input.complement].filter(Boolean).join(" ");
+    const cidade = up(cityForOutras(input.city, addr) ?? "");
+    pushField(cidade || "FORA DE SJC", 24, 0);
+  } else if (regiao) {
+    pushField(`REGIAO: ${regiao}`, 22, 0);
+  }
 
   const totalH = lines.reduce((sum, l) => sum + l.h + l.gap, 0);
   // Y inicial centraliza o bloco; nunca sobe acima de 12 dots.
