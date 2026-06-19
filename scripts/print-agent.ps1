@@ -119,6 +119,15 @@ function Test-PrinterReady {
     Write-Host "[AVISO] Impressora '$PrinterName' não encontrada." -ForegroundColor Yellow
     return $false
   }
+  # Impressora marcada como OFFLINE no Windows (travou / cabo USB solto / desligou).
+  # Aborta ANTES de reivindicar: as etiquetas seguem PENDENTES e o agente reimprime
+  # sozinho quando ela voltar — nunca marca "impresso" sem sair papel.
+  $wmi = Get-CimInstance Win32_Printer -Filter "Name='$PrinterName'" -ErrorAction SilentlyContinue
+  if ($wmi -and $wmi.WorkOffline) {
+    Write-Host "[AVISO] Impressora OFFLINE no Windows. Etiquetas seguem PENDENTES (nada marcado como impresso)." -ForegroundColor Yellow
+    Write-Host "       Religue a Zebra / cheque o cabo USB; o agente reimprime sozinho quando voltar." -ForegroundColor DarkGray
+    return $false
+  }
   # Jobs presos de rodadas anteriores (sintoma de driver corrompido)
   $stuck = @(Get-PrintJob -PrinterName $PrinterName -ErrorAction SilentlyContinue |
              Where-Object { $_.Size -eq 0 })
@@ -140,9 +149,10 @@ function Test-PrinterReady {
 
 function Send-Zpl {
   param([string]$Zpl)
-  $bytes = [System.Text.Encoding]::UTF8.GetBytes($Zpl)  # UTF-8 p/ casar com ^CI28 (acentos)
+  $bytes = [System.Text.Encoding]::UTF8.GetBytes($Zpl)
   [RawPrinter]::SendBytes($PrinterName, $bytes)
-  # Detecta driver corrompido: job fica preso com Size=0 mesmo após WritePrinter retornar OK
+  # Detecta driver corrompido: job fica preso com Size=0 mesmo após WritePrinter retornar OK.
+  # Aguarda uma única vez por chamada (lotes usam uma chamada só → 1 check por lote).
   Start-Sleep -Milliseconds 1500
   $stuck = @(Get-PrintJob -PrinterName $PrinterName -ErrorAction SilentlyContinue |
              Where-Object { $_.Size -eq 0 })
@@ -185,44 +195,67 @@ function Set-Error {
   } catch {}
 }
 
-# ── Processa uma etiqueta ────────────────────────────────────────────────────
-function Process-Label {
-  param($Label)
-  $id = $Label.id
-  $nome = $Label.recipientName
+# ── Processa um lote de etiquetas em um único job de impressão ───────────────
+# Cada label tem seu ^XA...^XZ concatenado; a Zebra os processa em série sem
+# pausa entre eles. A checagem de driver corrompido ocorre apenas 1x por lote.
+function Process-Batch {
+  param($Labels)
 
-  # 1. Claim (trava contra impressão dupla)
-  try {
-    $claim = Invoke-Claim -Id $id
-  } catch {
-    Write-Host "  [skip] $id já processada/concluída" -ForegroundColor DarkGray
-    return
+  # 1. Claim de todas as etiquetas do lote
+  $claimed = [System.Collections.Generic.List[object]]::new()
+  foreach ($label in $Labels) {
+    $id = $label.id
+    try {
+      $claim = Invoke-Claim -Id $id
+      if ($claim.alreadyClaimed) {
+        Write-Host "  [skip] $id já reivindicada por outro agente" -ForegroundColor DarkGray
+      } else {
+        $claimed.Add($label)
+      }
+    } catch {
+      Write-Host "  [skip] $id já processada/concluída" -ForegroundColor DarkGray
+    }
   }
-  if ($claim.alreadyClaimed) {
-    Write-Host "  [skip] $id já reivindicada por outro agente" -ForegroundColor DarkGray
-    return
+  if ($claimed.Count -eq 0) { return }
+
+  # 2. Busca ZPL de cada etiqueta reivindicada
+  $toPrint = [System.Collections.Generic.List[hashtable]]::new()
+  foreach ($label in $claimed) {
+    $id = $label.id
+    try {
+      $zpl = Get-Zpl -Id $id
+      if (-not $zpl) { throw "ZPL vazio retornado pela nuvem" }
+      $toPrint.Add(@{ Label = $label; Zpl = $zpl })
+    } catch {
+      $msg = $_.Exception.Message
+      Write-Host "  [ERRO] ${id} (get ZPL): $msg" -ForegroundColor Red
+      Set-Error -Id $id -Message $msg
+    }
   }
+  if ($toPrint.Count -eq 0) { return }
 
-  Write-Host "  → imprimindo $id ($nome)..." -ForegroundColor Cyan
-
-  # 2. Pega ZPL da nuvem + 3. imprime RAW
+  # 3. Concatena todos os ZPLs e envia como um único job RAW
+  Write-Host "  → enviando $($toPrint.Count) etiqueta(s) em lote contínuo..." -ForegroundColor Cyan
+  $batchZpl = ($toPrint | ForEach-Object { $_.Zpl.Trim() }) -join "`r`n"
   try {
-    $zpl = Get-Zpl -Id $id
-    if (-not $zpl) { throw "ZPL vazio retornado pela nuvem" }
-    Send-Zpl -Zpl $zpl
+    Send-Zpl -Zpl $batchZpl
   } catch {
     $msg = $_.Exception.Message
-    Write-Host "  [ERRO] ${id}: $msg" -ForegroundColor Red
-    Set-Error -Id $id -Message $msg
+    Write-Host "  [ERRO] Lote falhou: $msg" -ForegroundColor Red
+    foreach ($item in $toPrint) { Set-Error -Id $item.Label.id -Message $msg }
     return
   }
 
-  # 4. Marca impresso
-  try {
-    Set-Printed -Id $id
-    Write-Host "  [OK] $id impresso" -ForegroundColor Green
-  } catch {
-    Write-Host "  [AVISO] $id impresso mas falhou ao marcar 'impresso': $($_.Exception.Message)" -ForegroundColor Yellow
+  # 4. Marca todas como impressas
+  foreach ($item in $toPrint) {
+    $id   = $item.Label.id
+    $nome = $item.Label.recipientName
+    try {
+      Set-Printed -Id $id
+      Write-Host "  [OK] $id ($nome)" -ForegroundColor Green
+    } catch {
+      Write-Host "  [AVISO] $id impresso mas falhou ao marcar 'impresso': $($_.Exception.Message)" -ForegroundColor Yellow
+    }
   }
 }
 
@@ -241,7 +274,7 @@ function Invoke-Pass {
     Write-Host "[ABORTANDO] Impressora não está pronta. Corrija e rode novamente." -ForegroundColor Red
     return
   }
-  foreach ($label in $pending) { Process-Label -Label $label }
+  Process-Batch -Labels $pending
 }
 
 # ── Início ────────────────────────────────────────────────────────────────────
