@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { normalizeAddressInput, renderLabelText, validateLabelInput, labelDedupeKey } from "./labels";
+import { effectiveRegion, normalizeAddressInput, renderLabelText, validateLabelInput, labelDedupeKey } from "./labels";
 import { resolveRegion } from "./region-resolver";
 
 describe("labelDedupeKey", () => {
@@ -29,7 +29,7 @@ const completeInput = {
   postalCode: "12233690",
   city: "Sao Jose dos Campos",
   complement: "",
-  internalOrderNotes: "REGIAO LESTE",
+  internalOrderNotes: "REGIAO SUL", // Bosque dos Eucaliptos é Sul (fixture consistente)
 };
 
 describe("label domain", () => {
@@ -87,6 +87,29 @@ describe("label domain", () => {
     })).toEqual([]);
   });
 
+  it("conflito (c): bairro exato + CEP discordam do SELECT → corrige p/ o bairro", () => {
+    // SELECT diz Leste; bairro "Bosque dos Eucaliptos" (Sul, exato) e CEP 12233 (Sul)
+    expect(effectiveRegion({
+      recipientName: "Ana", street: "Rua X", neighborhood: "Bosque dos Eucaliptos",
+      postalCode: "12233690", internalOrderNotes: "Leste",
+    })).toBe("Sul");
+  });
+
+  it("conflito (c): se o CEP apoia o SELECT, mantém o SELECT (empate técnico)", () => {
+    // bairro "Jardim Satélite" resolve Sul (exato), mas CEP 12200 é Centro = SELECT
+    expect(effectiveRegion({
+      recipientName: "Ana", street: "Rua X", neighborhood: "Jardim Satélite",
+      postalCode: "12200000", internalOrderNotes: "Centro",
+    })).toBe("Centro");
+  });
+
+  it("sem conflito: bairro concorda com o SELECT → mantém", () => {
+    expect(effectiveRegion({
+      recipientName: "Ana", street: "Rua X", neighborhood: "Bosque dos Eucaliptos",
+      postalCode: "12233690", internalOrderNotes: "Sul",
+    })).toBe("Sul");
+  });
+
   it("bloco Origem/Destino: resolve região pelo DESTINO (Floresta=Leste), não pela Origem (Jardim América=Sul)", () => {
     const block = [
       "Origem:", "Rua Java, 174", "Ap 145", "Jardim América", "",
@@ -110,7 +133,7 @@ describe("label domain", () => {
         "Bosque dos eucaliptos",
         "Sao Jose dos Campos - CEP 12233690",
         "",
-        "REGIAO: LESTE",
+        "REGIAO: SUL",
       ].join("\n"),
     );
   });

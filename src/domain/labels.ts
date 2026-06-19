@@ -69,13 +69,30 @@ export function normalizeAddressInput(input: LabelInput): LabelInput {
   return input;
 }
 
+const ZONES = new Set(["centro", "norte", "sul", "leste", "oeste", "sudeste"]);
+
 /** Região efetiva: usa o campo internalOrderNotes se preenchido; senão RESOLVE do
- *  bairro/CEP/endereço. "" quando não dá p/ determinar com confiança (baixa). */
+ *  bairro/CEP/endereço.
+ *  Conflito (c): se o campo é uma zona mas o BAIRRO casa EXATO (alta) com OUTRA
+ *  zona E o CEP NÃO apoia o campo → corrige p/ a do bairro (dupla evidência de que
+ *  o SELECT foi mal-clicado). Se o CEP apoia o campo (empate) → mantém o SELECT.
+ *  "" quando nada resolve com confiança (baixa). */
 export function effectiveRegion(input: LabelInput): string {
   // prefixo "Regiao "/"Região " (o "." casa a/ã sem literal não-ASCII — evita
   // o bug de minificação da Vercel com chars acentuados no source)
   const field = clean(input.internalOrderNotes).replace(/^regi.o\s+/i, "");
-  if (field) return field;
+  if (field) {
+    const fieldLc = field.toLowerCase();
+    if (ZONES.has(fieldLc)) {
+      const byBairro = resolveRegion(input.neighborhood, input.postalCode);
+      if (byBairro.regiao && byBairro.confidence === "alta" && byBairro.regiao.toLowerCase() !== fieldLc) {
+        const cepZone = resolveRegion("", input.postalCode); // só CEP (bairro vazio)
+        const cepApoiaCampo = !!cepZone.regiao && cepZone.regiao.toLowerCase() === fieldLc;
+        if (!cepApoiaCampo) return byBairro.regiao; // bairro exato + CEP != campo → corrige
+      }
+    }
+    return field;
+  }
   const byBairro = resolveRegion(input.neighborhood, input.postalCode);
   const best = byBairro.regiao ? byBairro : resolveRegionFromText(input.street, input.postalCode);
   return best.regiao && best.confidence !== "baixa" ? best.regiao : "";

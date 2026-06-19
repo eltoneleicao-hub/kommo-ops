@@ -85,7 +85,7 @@ describe("renderLabelZPL — balde 'Outras' (fora de SJC) mostra a CIDADE, nunca
   it("região normal de SJC continua imprimindo 'REGIAO: X'", () => {
     const zpl = renderLabelZPL({
       recipientName: "Ana", street: "Rua X", number: "1",
-      neighborhood: "Centro", city: "SJC", postalCode: "12200000",
+      neighborhood: "Vila Industrial", city: "SJC", postalCode: "12200000",
       internalOrderNotes: "Leste", recipientPhone: "",
     });
     expect(zpl).toContain("^FDREGIAO: LESTE^FS");
@@ -131,7 +131,7 @@ describe("renderLabelZPL — campos longos quebram (não só o nome)", () => {
   it("não duplica 'REGIAO' quando o campo já vem como 'Região Sul'", () => {
     const zpl = renderLabelZPL({
       recipientName: "Fulano", street: "Rua A", number: "1",
-      neighborhood: "Centro", postalCode: "12200000", city: "SJC",
+      neighborhood: "Bosque dos Eucaliptos", postalCode: "12233690", city: "SJC",
       internalOrderNotes: "Região Sul", recipientPhone: "",
     });
     expect(zpl).toContain("^FDREGIAO: SUL^FS");
@@ -180,7 +180,7 @@ describe("renderLabelZPL — robustez (anti-quebra ZPL e anti-misroute)", () => 
   it("cidade de SJC mantém a região normal (não dispara o guarda)", () => {
     const zpl = renderLabelZPL({
       recipientName: "Ana", street: "Rua X", number: "10",
-      neighborhood: "Centro", city: "Sao Jose dos Campos", postalCode: "12200000",
+      neighborhood: "Bosque dos Eucaliptos", city: "Sao Jose dos Campos", postalCode: "12233690",
       internalOrderNotes: "Sul", recipientPhone: "",
     });
     expect(zpl).toContain("REGIAO: SUL");
@@ -231,7 +231,7 @@ describe("renderLabelZPL — campo Rua que não é endereço", () => {
     const zpl = renderLabelZPL({
       recipientName: "Ana",
       street: "Confio plenamente na competencia, nao e necessario sua visita.",
-      neighborhood: "Centro", city: "SJC", postalCode: "12200000",
+      neighborhood: "Bosque dos Eucaliptos", city: "SJC", postalCode: "12233690",
       internalOrderNotes: "Sul", recipientPhone: "",
     });
     expect(zpl).not.toContain("CONFIO");
