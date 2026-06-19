@@ -1,5 +1,25 @@
 import { describe, it, expect } from "vitest";
-import { resolveRegion, resolveRegionFromText, normalizeBairro } from "./region-resolver";
+import { resolveRegion, resolveRegionFromText, normalizeBairro, detectNonSjcCity, cityForOutras } from "./region-resolver";
+
+describe("detectNonSjcCity / cityForOutras — cidade do balde 'Outras'", () => {
+  it("detecta cidade fora de SJC no endereço em texto livre", () => {
+    expect(detectNonSjcCity("Rua A, 10, Centro, Jacarei")).toBe("Jacarei");
+    expect(detectNonSjcCity("entrega em cacapava - sp")).toBe("Cacapava");
+    expect(detectNonSjcCity("Av B 200, Pindamonhangaba")).toBe("Pindamonhangaba");
+  });
+  it("texto sem cidade conhecida -> null", () => {
+    expect(detectNonSjcCity("Rua A, 10, Centro")).toBeNull();
+    expect(detectNonSjcCity("")).toBeNull();
+  });
+  it("cityForOutras usa o campo Cidade quando preenchido (e nao for SJC)", () => {
+    expect(cityForOutras("Jacarei", "")).toBe("Jacarei");
+    expect(cityForOutras("Atibaia", "")).toBe("Atibaia");
+  });
+  it("cityForOutras ignora campo Cidade = SJC e extrai do endereco", () => {
+    expect(cityForOutras("Sao Jose dos Campos", "rua x, Taubate")).toBe("Taubate");
+    expect(cityForOutras("", "rua x, Caraguatatuba")).toBe("Caraguatatuba");
+  });
+});
 
 describe("resolveRegionFromText — endereço livre (campo Rua/Avenida)", () => {
   it("resolve bairro de SJC mesmo grudado com CEP/cidade", () => {
@@ -171,6 +191,56 @@ describe("resolveRegion — núcleo do nome (prefixo genérico omitido)", () => 
       expect(r.regiao).toBe(regiao);
       expect(r.confidence === "alta" || r.confidence === "media").toBe(true);
     });
+  });
+});
+
+describe("resolveRegion — duplicidade Bandeirantes (Vila=Centro, Jardim=Sul)", () => {
+  it("Vila Bandeirantes → Centro (alta)", () => {
+    const r = resolveRegion("Vila Bandeirantes");
+    expect(r.regiao).toBe("Centro");
+    expect(r.confidence).toBe("alta");
+  });
+  it("Jardim Bandeirantes → Sul (alta)", () => {
+    const r = resolveRegion("Jardim Bandeirantes");
+    expect(r.regiao).toBe("Sul");
+    expect(r.confidence).toBe("alta");
+  });
+  it("Jardim dos Bandeirantes → Sul (alta)", () => {
+    const r = resolveRegion("Jardim dos Bandeirantes");
+    expect(r.regiao).toBe("Sul");
+    expect(r.confidence).toBe("alta");
+  });
+  it('SEGURANÇA: "Bandeirantes" sozinho → null (ambíguo Centro/Sul, não chuta)', () => {
+    expect(resolveRegion("Bandeirantes").regiao).toBeNull();
+  });
+});
+
+describe("resolveRegion — correções de duplicidade (pesquisa CEP/coords)", () => {
+  it("Morada do Sol → Sul (CEP 12237, ~7km ao sul; era Leste)", () => {
+    const r = resolveRegion("Morada do Sol");
+    expect(r.regiao).toBe("Sul");
+    expect(r.confidence).toBe("alta");
+  });
+  it("Conj. Res. Morada do Sol → Sul (mesmo lugar)", () => {
+    expect(resolveRegion("Conj. Res. Morada do Sol").regiao).toBe("Sul");
+  });
+  it("Chácara dos Eucaliptos → Leste (CEP 12221, a leste; era Centro)", () => {
+    const r = resolveRegion("Chácara dos Eucaliptos");
+    expect(r.regiao).toBe("Leste");
+    expect(r.confidence).toBe("alta");
+  });
+  it("Bosque dos Eucaliptos segue Sul (não afetado)", () => {
+    expect(resolveRegion("Bosque dos Eucaliptos").regiao).toBe("Sul");
+  });
+  it("Jardim Primavera → Leste (loteamento Eugênio de Melo)", () => {
+    expect(resolveRegion("Jardim Primavera").regiao).toBe("Leste");
+  });
+  it("Conj. Res. Primavera → Sul (lugar distinto do Jardim Primavera)", () => {
+    expect(resolveRegion("Conj. Res. Primavera").regiao).toBe("Sul");
+  });
+  it("Primavera I / II → Leste", () => {
+    expect(resolveRegion("Primavera I").regiao).toBe("Leste");
+    expect(resolveRegion("Primavera II").regiao).toBe("Leste");
   });
 });
 

@@ -127,10 +127,10 @@ function fuzzyRegion(norm: string): Regiao | null {
  */
 const BAIRROS_POR_REGIAO: Record<Regiao, string[]> = {
   Centro: [
-    "Banhado", "Bairro dos Pinheiros", "Centro", "Chácara dos Eucaliptos",
+    "Banhado", "Bairro dos Pinheiros", "Centro",
     "Conj. Hab. Vale dos Pinheiros", "Conj. Res. Monte Castelo",
     "Favela Vila Nova Esperança", "Jardim Aparecida", "Jardim Apolo I",
-    "Jardim Apolo II", "Jardim Augusta", "Jardim Azevedo", "Jardim Bandeirantes",
+    "Jardim Apolo II", "Jardim Augusta", "Jardim Azevedo",
     "Jardim Bela Vista", "Jardim Corinthians", "Jardim Esplanada",
     "Jardim Esplanada II", "Jardim Frei Leopoldo", "Jardim Jussara",
     "Jardim Margareth", "Jardim Maringá", "Jardim Matarazzo",
@@ -139,7 +139,8 @@ const BAIRROS_POR_REGIAO: Record<Regiao, string[]> = {
     "Jardim Santa Madalena", "Jardim Santos Dumont", "Jardim São Dimas",
     "Jardim São José", "Jardim Topázio", "Jardim Vale Paraíso", "Monte Castelo",
     "Res. Esplanada do Sol", "Res. Martins Pereira", "Vila Abel", "Vila Ady'Ana",
-    "Vila Adyana", "Vila Betânia", "Vila Cardoso", "Vila Ema", "Vila Guaianazes",
+    "Vila Adyana", "Vila Bandeirantes", "Vila Betânia", "Vila Cardoso", "Vila Ema",
+    "Vila Guaianazes",
     "Vila Guarani", "Vila Higienópolis", "Vila Icaraí", "Vila Igualdade",
     "Vila Ipiranga", "Vila Jaci", "Vila Kennedy", "Vila Luzia", "Vila Maria",
     "Vila Mascarenhas Ferraz", "Vila Nova Conceição", "Vila Nova São José",
@@ -174,13 +175,14 @@ const BAIRROS_POR_REGIAO: Record<Regiao, string[]> = {
     "Conj. Res. Primavera", "Conj. Res. Recanto dos Eucaliptos",
     "Conj. Res. Recanto dos Pinheiros", "Conj. Res. Sol Nascente",
     "Floradas de São José", "Jardim América", "Jardim Anhembi", "Jardim Aeroporto",
-    "Jardim Colonial", "Jardim Cruzeiro do Sul", "Jardim das Azaléias",
+    "Jardim Bandeirantes", "Jardim Colonial", "Jardim Cruzeiro do Sul",
+    "Jardim das Azaléias",
     "Jardim del Rey", "Jardim do Céu", "Jardim dos Bandeirantes", "Jardim Estoril",
     "Jardim Imperial", "Jardim Juliana", "Jardim Madureira", "Jardim Mesquita",
     "Jardim Nova República", "Jardim Oriental", "Jardim Oriente", "Jardim Paraíso",
     "Jardim Petrópolis", "Jardim Portugal", "Jardim República", "Jardim Rosário",
     "Jardim Satélite", "Jardim Sul", "Jardim Terras do Sul", "Jardim Vale do Sol",
-    "Jardim Veneza", "Palmeiras de São José", "Parque dos Ipês",
+    "Jardim Veneza", "Morada do Sol", "Palmeiras de São José", "Parque dos Ipês",
     "Parque Independência", "Parque Industrial", "Parque Interlagos",
     "Parque Residencial União", "Pernambucana de Baixo", "Pinheirinho",
     "Projeto Torrão de Ouro", "Quinta das Flores", "Res. Altos do Bosque",
@@ -192,7 +194,8 @@ const BAIRROS_POR_REGIAO: Record<Regiao, string[]> = {
     "Águas da Prata", "Araújo", "Bairrinho", "Bairro Cajurú", "Bica d'Água",
     "Bom Retiro", "Cambucá", "Campos de São José", "Capão Grosso", "Capão Grosso II",
     "Castanheira II", "Chácara Boa Esperança", "Chácara Capão Grosso",
-    "Chácara Majestic", "Chácara Pousada do Vale", "Chácara Santa Luzia",
+    "Chácara dos Eucaliptos", "Chácara Majestic", "Chácara Pousada do Vale",
+    "Chácara Santa Luzia",
     "Chácara São Vicente", "Chácara Sítio Jataí", "Cidade Vista Verde",
     "Condomínio Floresta", "Conj. Hab. Intervale", "Conj. Hab. São José",
     "Conj. Hab. Vila Tatetuba", "Conj. Integração", "Conj. Res. JK",
@@ -211,7 +214,7 @@ const BAIRROS_POR_REGIAO: Record<Regiao, string[]> = {
     "Jardim São Jorge", "Jardim São Vicente", "Jardim Três José", "Jardim Universo",
     "Jardim Valparaíba", "Mantiqueira I", "Mantiqueira II", "Maravilhas do Cajuru",
     "Martins Guimarães", "Mato Dentro", "Mirante I", "Mirante II", "Morada do Fênix",
-    "Morada do Sol", "Nossa Senhora do Bom Retiro", "Nova Michigan II",
+    "Nossa Senhora do Bom Retiro", "Nova Michigan II",
     "Nova Michigan III", "Nova Michigan IV", "Parque Nova Esperança",
     "Parque Novo Horizonte", "Portal do Céu", "Pousada do Vale", "Primavera I",
     "Primavera II", "Recanto do Vale", "Recanto dos Lagos", "Renascer I",
@@ -251,8 +254,8 @@ const BAIRROS_POR_REGIAO: Record<Regiao, string[]> = {
 const BAIRROS_EXTRA: Record<Regiao, string[]> = {
   Centro: [],
   Norte: ["Jardim Telespark", "Jardim Minas Gerais"],
-  Sul: ["Jardim Morumbi", "Jardim Primavera"],
-  Leste: ["Jardim das Paineiras II", "Setville Altos de São José", "Setville"],
+  Sul: ["Jardim Morumbi"],
+  Leste: ["Jardim das Paineiras II", "Setville Altos de São José", "Setville", "Jardim Primavera"],
   Oeste: [],
   Sudeste: [],
 };
@@ -355,7 +358,6 @@ const ALIAS_SOURCE: Array<[string, Regiao]> = [
   ["Vale do Sol", "Sul"],           // Jardim Vale do Sol
   ["Morumbi", "Sul"],               // Cidade Morumbi / Jardim Morumbi
   ["Jardim Morumbi", "Sul"],        // bairro real fora da lista oficial
-  ["Jardim Primavera", "Sul"],      // bairro real fora da lista oficial (zona Sul)
   ["Parque Industrial SJC", "Sul"], // Parque Industrial (sufixo "SJC")
   // Leste
   ["Nova Michigan", "Leste"],       // Jardim/Nova Michigan
@@ -605,6 +607,60 @@ const SJC_MARK =
   /\b(sao jose dos campos|s jose dos campos|sao jose dos|sjcampos|sjc|s j campos|sjcampos)\b/;
 const STREET_SEG =
   /^(r|rua|av|avenida|alameda|al|rod|rodovia|estrada|estr|praca|pca|travessa|tv|viela|via|largo|ladeira|rua\/av|endereco)\b/;
+
+/* ── Cidade de destino p/ leads do balde "Outras" (fora de SJC) ───────────────
+ * A etiqueta NUNCA imprime "REGIAO: OUTRAS" — no lugar mostra a CIDADE (info de
+ * roteamento real). Nomes em ASCII de propósito: a etiqueta translitera mesmo, e
+ * evita a armadilha de literal não-ASCII quebrar no build minificado da Vercel.
+ */
+const CITY_DISPLAY: Record<string, string> = {
+  jacarei: "Jacarei", jacarehy: "Jacarei",
+  cacapava: "Cacapava",
+  taubate: "Taubate",
+  pindamonhangaba: "Pindamonhangaba", pinda: "Pindamonhangaba",
+  ubatuba: "Ubatuba",
+  caraguatatuba: "Caraguatatuba", caragua: "Caraguatatuba",
+  guaratingueta: "Guaratingueta",
+  sorocaba: "Sorocaba",
+  "sao paulo": "Sao Paulo",
+  "mogi das cruzes": "Mogi das Cruzes", mogi: "Mogi das Cruzes",
+  taquaritinga: "Taquaritinga",
+  jambeiro: "Jambeiro",
+  "monteiro lobato": "Monteiro Lobato",
+  igarata: "Igarata",
+  "santa branca": "Santa Branca",
+  paraibuna: "Paraibuna",
+  lorena: "Lorena",
+  aparecida: "Aparecida",
+  cruzeiro: "Cruzeiro",
+  "campos do jordao": "Campos do Jordao",
+};
+
+const titleCase = (s: string) => s.replace(/\b[a-z]/g, (c) => c.toUpperCase());
+
+/** Detecta o nome de uma cidade fora de SJC dentro de um texto (endereço livre).
+ *  Retorna o nome canônico (ASCII) ou null. */
+export function detectNonSjcCity(text: string | null | undefined): string | null {
+  const norm = normalizeBairro(text);
+  if (!norm) return null;
+  const m = norm.match(NON_SJC_CITIES);
+  if (!m) return null;
+  return CITY_DISPLAY[m[1]] ?? titleCase(m[1]);
+}
+
+/** Cidade a exibir na etiqueta de um lead do balde "Outras": usa o campo Cidade
+ *  (se preenchido e NÃO for SJC), senão extrai do endereço; null se nada confiável. */
+export function cityForOutras(
+  cityField: string | null | undefined,
+  addressText: string | null | undefined,
+): string | null {
+  const c = normalizeBairro(cityField);
+  if (c && !SJC_MARK.test(c)) {
+    const m = c.match(NON_SJC_CITIES);
+    return m ? (CITY_DISPLAY[m[1]] ?? titleCase(c)) : titleCase(c);
+  }
+  return detectNonSjcCity(addressText);
+}
 
 export function resolveRegionFromText(text: string | null | undefined, cep?: string | null): RegionResult {
   const raw = String(text ?? "");
