@@ -18,6 +18,10 @@ Os botões fazem o trabalho pesado: leem os dados, pulam quem já foi impresso e
 >
 > **As cores das mensagens:** ✓ verde = deu certo · ⚠ laranja = falta um dado (você completa) · ✗ vermelho = deu erro (tente de novo).
 
+**O painel de botões** aparece dentro do cartão da pessoa, assim:
+
+![Painel de botões do widget no cartão do lead](img/tela-painel.png)
+
 ---
 
 ## 1. 🧭 Definir Região (Lote)
@@ -97,6 +101,12 @@ Os botões fazem o trabalho pesado: leem os dados, pulam quem já foi impresso e
 5. Escolha o modo: **✅ Pular já impressas** (recomendado) ou **🔁 Reimprimir TUDO**.
 6. Confirme de novo. Aí sim ele gera e manda para a impressora.
 7. Leia o resumo: quantas saíram, quantas foram puladas, quantos convites gastou.
+
+A janela de seleção (passo 2) e a escolha do modo (passo 5) são assim:
+
+![Tela de seleção: marque quem entra no lote](img/tela-selecao.png)
+
+![Modo de impressão: a dupla verificação — pular já impressas ou reimprimir tudo](img/tela-modo.png)
 
 **✅ Pode confiar**
 - Nada é impresso antes das suas duas escolhas (marcar + escolher o modo). Quer desistir? Feche a janela.
