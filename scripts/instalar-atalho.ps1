@@ -34,7 +34,18 @@ if (-not (Test-Path $cfgPath)) {
   Write-Host "[skip] Config já existe em $cfgPath (não sobrescrita)" -ForegroundColor DarkGray
 }
 
-# 2) Atalho na Área de Trabalho ------------------------------------------------
+# 2) Ícone do app (logo Dr. Elton) — copia p/ LOCALAPPDATA --------------------
+$icoSrc = Join-Path $scriptsDir 'dr-elton.ico'
+$icoDst = Join-Path $cfgDir 'dr-elton.ico'
+if (Test-Path $icoSrc) {
+  New-Item -ItemType Directory -Force -Path $cfgDir | Out-Null
+  Copy-Item $icoSrc $icoDst -Force
+  Write-Host "[ok] Ícone copiado para $icoDst" -ForegroundColor Green
+} else {
+  Write-Host "[aviso] dr-elton.ico nao encontrado em $scriptsDir — usando icone padrao" -ForegroundColor Yellow
+}
+
+# 3) Atalho na Área de Trabalho ------------------------------------------------
 $desktop = [Environment]::GetFolderPath('Desktop')
 $lnkPath = Join-Path $desktop 'Agente de Impressão.lnk'
 $ws  = New-Object -ComObject WScript.Shell
@@ -42,7 +53,7 @@ $lnk = $ws.CreateShortcut($lnkPath)
 $lnk.TargetPath       = (Get-Command powershell.exe).Source
 $lnk.Arguments        = "-STA -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$gui`""
 $lnk.WorkingDirectory = $scriptsDir
-$lnk.IconLocation     = "$env:SystemRoot\System32\shell32.dll,16"
+$lnk.IconLocation     = if (Test-Path $icoDst) { "$icoDst,0" } else { "$env:SystemRoot\System32\shell32.dll,16" }
 $lnk.Description       = 'Liga e desliga o agente de impressão de etiquetas'
 $lnk.WindowStyle      = 7
 $lnk.Save()

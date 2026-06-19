@@ -82,6 +82,10 @@ function Get-Config {
       }
     } catch {}
   }
+  # Portabilidade entre PCs: o print-agent.ps1 vive sempre ao lado deste app.
+  # Ignora qualquer caminho absoluto salvo (de outro PC) e usa o co-localizado.
+  $coLocated = Join-Path $PSScriptRoot 'print-agent.ps1'
+  if (Test-Path $coLocated) { $c.AgentScript = $coLocated }
   return $c
 }
 function Save-Config { param($c)
@@ -100,6 +104,11 @@ $form.StartPosition = 'CenterScreen'
 $form.FormBorderStyle = 'FixedSingle'
 $form.MaximizeBox = $false
 $form.Font = New-Object Drawing.Font('Segoe UI', 10)
+
+# Ícone da janela e da barra de tarefas (logo Dr. Elton Etiquetas)
+foreach ($ip in @((Join-Path $env:LOCALAPPDATA 'KommoAgente\dr-elton.ico'), (Join-Path $PSScriptRoot 'dr-elton.ico'))) {
+  if (Test-Path $ip) { try { $form.Icon = New-Object System.Drawing.Icon($ip) } catch {} ; break }
+}
 
 $lblTitle = New-Object Windows.Forms.Label
 $lblTitle.Text = 'Agente de Impressão de Etiquetas'

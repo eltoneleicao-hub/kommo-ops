@@ -1,0 +1,59 @@
+==============================================
+  AGENTE DE IMPRESSAO - Dr. Elton Etiquetas
+  Como instalar em um PC (passo a passo)
+==============================================
+
+Este app liga a fila de etiquetas (nuvem) a impressora Zebra deste PC.
+
+>> Manual completo e ilustrado (para quem vai OPERAR o app):
+   "Manual de Uso - Agente de Impressao.pdf"  (aqui na pasta APP)
+
+----------------------------------------------
+INSTALACAO  (fazer 1 vez em cada PC novo)
+----------------------------------------------
+1) Copie a pasta APP inteira para o PC novo
+   (qualquer lugar serve, ex.: a Area de Trabalho).
+
+2) Entre em APP\scripts, clique com o BOTAO DIREITO em
+   "instalar-atalho.ps1"  ->  "Executar com o PowerShell".
+   (Se nao aparecer a opcao, abra o PowerShell na pasta e rode:
+     powershell -ExecutionPolicy Bypass -File "instalar-atalho.ps1")
+
+   Isso cria o atalho "Agente de Impressao" na Area de Trabalho,
+   ja com o icone do Dr. Elton, e prepara a configuracao.
+
+3) Instale o driver da impressora Zebra e confirme o nome dela.
+   Nome padrao esperado:   ZDesigner ZD220-203dpi ZPL
+   (se for outro, ajuste no botao CONFIGURAR do app)
+
+4) Abra o atalho "Agente de Impressao"  ->  botao CONFIGURAR  ->
+   preencha o campo Secret com:   drelton123   ->  Salvar.
+
+Pronto! Clique em LIGAR para comecar a imprimir.
+
+----------------------------------------------
+USO NO DIA A DIA
+----------------------------------------------
+- LIGAR ............ fica verificando a fila e imprime sozinho
+- DESLIGAR ......... para de imprimir
+- Imprimir agora ... imprime o que esta pendente e para
+- Testar impressora  solta uma etiqueta de teste
+- O app mostra quantas etiquetas estao na fila
+
+Mantenha o PC ligado e o app aberto enquanto quiser imprimir.
+
+----------------------------------------------
+PRE-REQUISITOS DO PC
+----------------------------------------------
+- Windows 10 ou 11 (o PowerShell ja vem incluso)
+- Internet
+- Impressora Zebra conectada por USB, com driver instalado
+
+----------------------------------------------
+OBSERVACOES
+----------------------------------------------
+- O Secret NAO vem salvo no app (seguranca). Digite 1x em cada PC.
+- NAO copie o atalho .lnk de um PC para outro: rode o instalador
+  no PC novo (ele gera o atalho com os caminhos certos daquele PC).
+- O ZPL das etiquetas e gerado na nuvem; este app so imprime.
+==============================================
