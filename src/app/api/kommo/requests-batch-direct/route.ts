@@ -104,6 +104,7 @@ export async function POST(request: NextRequest) {
   const existingLabels = await prisma.label.findMany({
     where: { printStatus: { not: "erro" } },
     select: {
+      printStatus: true,
       MaterialRequest: {
         select: {
           kommoLeadId: true, recipientName: true, street: true,
@@ -113,9 +114,15 @@ export async function POST(request: NextRequest) {
     },
   });
   const keyToLeads = new Map<string, Set<string>>();
+  // UMA ETIQUETA POR LEAD: leads que já têm etiqueta "impresso" em QUALQUER etapa
+  // do funil. No modo padrão eles são PULADOS (não duplica nem baixa convite de
+  // novo, mesmo que o lead tenha avançado de etapa). Só saem outra vez se o
+  // humano escolher "Reimprimir TUDO" (reprintPrinted) — a dupla verificação.
+  const printedLeads = new Set<string>();
   for (const lab of existingLabels) {
     const mr = lab.MaterialRequest;
     if (!mr) continue;
+    if (lab.printStatus === "impresso" && mr.kommoLeadId) printedLeads.add(mr.kommoLeadId);
     const k = labelDedupeKey(mr);
     if (!k) continue;
     if (!keyToLeads.has(k)) keyToLeads.set(k, new Set());
@@ -151,6 +158,9 @@ export async function POST(request: NextRequest) {
             missingFields: missing,
             duplicate: duplicateOf != null,
             duplicateOf: duplicateOf,
+            // já tem etiqueta impressa em alguma etapa (uma por lead) — o widget
+            // pode destacar e o backend pula no modo padrão.
+            alreadyPrinted: printedLeads.has(l.kommoLeadId),
           };
         }),
       }),
@@ -169,9 +179,12 @@ export async function POST(request: NextRequest) {
     if (k && !seenGen.has(k)) seenGen.set(k, l.kommoLeadId);
   }
 
-  // Pré-checagem de estoque só p/ elegíveis NÃO-duplicados (evita gerar parcial).
+  // Pré-checagem de estoque só p/ quem REALMENTE baixa convite: elegível,
+  // não-duplicado e não-já-impresso (pulo e reimpressão não baixam estoque).
   const eligible = leads.filter(
-    (l) => !dupOf.has(l.kommoLeadId) && validateLabelInput(labelInputOf(l)).length === 0,
+    (l) => !dupOf.has(l.kommoLeadId)
+      && !printedLeads.has(l.kommoLeadId)
+      && validateLabelInput(labelInputOf(l)).length === 0,
   ).length;
   if (deductStock && eligible > 0) {
     const sku = process.env.STOCK_PRODUCT_SKU;
@@ -214,6 +227,14 @@ export async function POST(request: NextRequest) {
     if (dupOf.has(l.kommoLeadId)) {
       duplicates++;
       results.push({ kommoLeadId: l.kommoLeadId, status: "duplicado", duplicateOf: dupOf.get(l.kommoLeadId) });
+      continue;
+    }
+    // Uma etiqueta por lead: já impresso em QUALQUER etapa → pula (não duplica
+    // nem baixa convite). Só reimprime se o humano pediu "Reimprimir TUDO".
+    const leadAlreadyPrinted = printedLeads.has(l.kommoLeadId);
+    if (leadAlreadyPrinted && !reprintPrinted) {
+      alreadyPrinted++;
+      results.push({ kommoLeadId: l.kommoLeadId, status: "ja_impresso" });
       continue;
     }
     try {
@@ -277,7 +298,9 @@ export async function POST(request: NextRequest) {
         await tx.materialRequest.update({ where: { id: materialRequest.id }, data: { status: "etiqueta_gerada" } });
 
         let deducted = false;
-        if (deductStock) {
+        // Reimpressão de lead já impresso (mesmo criando MR numa etapa nova) NÃO
+        // baixa convite — é a mesma pessoa. Só leads realmente novos baixam.
+        if (deductStock && !leadAlreadyPrinted) {
           const sku = process.env.STOCK_PRODUCT_SKU;
           const locationName = process.env.STOCK_LOCATION_NAME;
           if (sku && locationName) {
