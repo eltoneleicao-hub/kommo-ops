@@ -37,6 +37,9 @@ model Label {
   printedAt       DateTime?
   errorMessage    String?
   createdAt       DateTime        @default(now())
+  // Atualizado em todo update (claim/printed/error/reaper). Usado pelo reaper
+  // em /pending p/ devolver "processando" travado (crash do agente) à fila.
+  updatedAt       DateTime        @updatedAt @default(now())
   MaterialRequest MaterialRequest @relation(fields: [requestId], references: [id])
 }
 

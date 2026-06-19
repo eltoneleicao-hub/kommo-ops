@@ -12,6 +12,19 @@ export async function PATCH(
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
 
+  // Reivindicação ATÔMICA: pendente -> processando numa única query condicional.
+  // Evita a race do findUnique+update (dois agentes não pegam a mesma etiqueta).
+  // count === 1 => este request reivindicou; count === 0 => não estava pendente.
+  const claimed = await prisma.label.updateMany({
+    where: { id, printStatus: "pendente" },
+    data: { printStatus: "processando" },
+  });
+
+  if (claimed.count === 1) {
+    return NextResponse.json({ status: "processando" });
+  }
+
+  // Não reivindicou: descobre por quê (não existe / já terminou / já em curso).
   const label = await prisma.label.findUnique({ where: { id } });
 
   if (!label) {
@@ -25,14 +38,6 @@ export async function PATCH(
     );
   }
 
-  if (label.printStatus === "processando") {
-    return NextResponse.json({ status: "processando", alreadyClaimed: true });
-  }
-
-  await prisma.label.update({
-    where: { id },
-    data: { printStatus: "processando" },
-  });
-
-  return NextResponse.json({ status: "processando" });
+  // Só resta "processando": outro agente (ou o reaper→reimpressão) já está com ela.
+  return NextResponse.json({ status: "processando", alreadyClaimed: true });
 }

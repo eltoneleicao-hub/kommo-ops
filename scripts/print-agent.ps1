@@ -9,10 +9,17 @@
     1. GET  {ApiUrl}/api/labels/pending?secret=...   (pega pendentes)
     2. PATCH /api/labels/{id}/claim                  (trava: pendente -> processando)
     3. POST  /api/labels/print {dryRun:true}         (pega o ZPL da nuvem)
-    4. envia o ZPL RAW p/ a Zebra (winspool, sem GDI)
-    5. PATCH /api/labels/{id}/printed   (ou /error em caso de falha)
+    4. envia o ZPL RAW p/ a Zebra (winspool, sem GDI) — UMA etiqueta por job
+    5. confirma que o job saiu da fila SEM erro/pausa (até ConfirmTimeoutSec)
+    6. PATCH /api/labels/{id}/printed   (ou /error se não confirmou)
 
   O ZPL é gerado na nuvem (fonte única da verdade); o agente só imprime os bytes.
+
+  Cada etiqueta é um job separado e só vira "impresso" depois que o Windows
+  confirma que o job concluiu sem erro — assim a impressora sem etiqueta/ribbon
+  (ou em pausa) NÃO marca "impresso" fantasma. Limite conhecido: se o driver
+  bufferiza e descarta os bytes sem reportar estado, a confirmação por fila não
+  detecta; a garantia 100% exigiria leitura bidirecional (~HS) da Zebra.
 
 .PARAMETER ApiUrl
   URL do backend. Default: https://kommo-ops.vercel.app
@@ -42,6 +49,10 @@ param(
   [string]$Secret = $env:KOMMO_WEBHOOK_SECRET,
   [string]$PrinterName = $env:ZEBRA_PRINTER_NAME,
   [int]$IntervalSeconds = 5,
+  # Segundos p/ confirmar que CADA etiqueta saiu da fila sem erro antes de marcar
+  # "impresso". Se estourar (ou a fila acusar erro/pausa/papel), marca ERRO — a
+  # etiqueta aparece como pendência no relatório em vez de "impresso" fantasma.
+  [int]$ConfirmTimeoutSec = 25,
   [switch]$Once
 )
 
@@ -147,19 +158,50 @@ function Test-PrinterReady {
   return $true
 }
 
-function Send-Zpl {
-  param([string]$Zpl)
+# Envia UMA etiqueta e só retorna quando o Windows confirma que o job concluiu
+# SEM erro/pausa. Lança exceção em qualquer não-confirmação (driver corrompido,
+# sem papel/ribbon, tampa aberta, offline, ou timeout) — o chamador marca ERRO,
+# nunca "impresso" fantasma. Limite: se o driver descartar os bytes sem reportar
+# estado, a fila esvazia e isto retorna OK mesmo sem papel (ver cabeçalho).
+function Send-OneAndConfirm {
+  param([string]$Zpl, [int]$TimeoutSec = 25)
+
+  # IDs já na fila antes de enviar (p/ identificar o job desta etiqueta).
+  $before = @(Get-PrintJob -PrinterName $PrinterName -ErrorAction SilentlyContinue |
+              Select-Object -ExpandProperty Id)
+
   $bytes = [System.Text.Encoding]::UTF8.GetBytes($Zpl)
   [RawPrinter]::SendBytes($PrinterName, $bytes)
-  # Detecta driver corrompido: job fica preso com Size=0 mesmo após WritePrinter retornar OK.
-  # Aguarda uma única vez por chamada (lotes usam uma chamada só → 1 check por lote).
-  Start-Sleep -Milliseconds 1500
-  $stuck = @(Get-PrintJob -PrinterName $PrinterName -ErrorAction SilentlyContinue |
-             Where-Object { $_.Size -eq 0 })
-  if ($stuck.Count -gt 0) {
-    $stuck | Remove-PrintJob -ErrorAction SilentlyContinue
-    throw "Job ficou preso na fila (Printing,Retained,Size=0) — driver ZDesigner corrompido. Reinstale o driver e tente novamente."
+
+  $deadline = (Get-Date).AddSeconds($TimeoutSec)
+  $appeared = $false
+  while ((Get-Date) -lt $deadline) {
+    Start-Sleep -Milliseconds 400
+    $jobs = @(Get-PrintJob -PrinterName $PrinterName -ErrorAction SilentlyContinue)
+
+    # Job preso com Size=0 => driver ZDesigner corrompido.
+    $z = @($jobs | Where-Object { $_.Size -eq 0 })
+    if ($z.Count -gt 0) {
+      $z | Remove-PrintJob -ErrorAction SilentlyContinue
+      throw "Job preso na fila (Size=0) — driver ZDesigner corrompido. Reinstale o driver."
+    }
+
+    # Estado de erro/pausa/intervenção => a impressora NÃO concluiu (sem papel,
+    # ribbon, tampa aberta, offline...). Não marca impresso.
+    $bad = @($jobs | Where-Object { "$($_.JobStatus)" -match "Error|Paused|Blocked|Offline|PaperOut|UserIntervention|Deleting" })
+    if ($bad.Count -gt 0) {
+      $st = (($bad | ForEach-Object { "$($_.JobStatus)" }) | Select-Object -Unique) -join ", "
+      $bad | Remove-PrintJob -ErrorAction SilentlyContinue
+      throw "Impressora nao concluiu (status: $st). Verifique etiqueta/ribbon/tampa."
+    }
+
+    $mine = @($jobs | Where-Object { $before -notcontains $_.Id })
+    if ($mine.Count -gt 0) { $appeared = $true }
+
+    # Concluiu: fila vazia, ou o job desta etiqueta apareceu e já saiu.
+    if ($jobs.Count -eq 0 -or ($appeared -and $mine.Count -eq 0)) { return }
   }
+  throw "Tempo esgotado ($TimeoutSec s) sem confirmar a saida da etiqueta."
 }
 
 # ── Chamadas HTTP ─────────────────────────────────────────────────────────────
@@ -195,66 +237,63 @@ function Set-Error {
   } catch {}
 }
 
-# ── Processa um lote de etiquetas em um único job de impressão ───────────────
-# Cada label tem seu ^XA...^XZ concatenado; a Zebra os processa em série sem
-# pausa entre eles. A checagem de driver corrompido ocorre apenas 1x por lote.
+# ── Processa as etiquetas, UMA por job, com confirmação de saída ─────────────
+# Cada etiqueta é reivindicada, impressa e confirmada individualmente. Só vira
+# "impresso" depois que o Windows confirma que o job concluiu sem erro. Assim, se
+# a mídia/ribbon acabar no meio, a etiqueta do momento vira ERRO (visível no
+# relatório) e o lote é interrompido — as demais seguem PENDENTES (não foram
+# reivindicadas) e voltam na próxima passada, sem "impresso" fantasma.
 function Process-Batch {
   param($Labels)
 
-  # 1. Claim de todas as etiquetas do lote
-  $claimed = [System.Collections.Generic.List[object]]::new()
+  Write-Host "  → imprimindo até $($Labels.Count) etiqueta(s), uma a uma (com confirmação)..." -ForegroundColor Cyan
   foreach ($label in $Labels) {
-    $id = $label.id
+    $id   = $label.id
+    $nome = $label.recipientName
+
+    # 1. Claim (pendente -> processando). Já reivindicada/concluída => pula.
     try {
       $claim = Invoke-Claim -Id $id
       if ($claim.alreadyClaimed) {
         Write-Host "  [skip] $id já reivindicada por outro agente" -ForegroundColor DarkGray
-      } else {
-        $claimed.Add($label)
+        continue
       }
     } catch {
       Write-Host "  [skip] $id já processada/concluída" -ForegroundColor DarkGray
+      continue
     }
-  }
-  if ($claimed.Count -eq 0) { return }
 
-  # 2. Busca ZPL de cada etiqueta reivindicada
-  $toPrint = [System.Collections.Generic.List[hashtable]]::new()
-  foreach ($label in $claimed) {
-    $id = $label.id
+    # 2. Busca o ZPL desta etiqueta.
+    $zpl = $null
     try {
       $zpl = Get-Zpl -Id $id
       if (-not $zpl) { throw "ZPL vazio retornado pela nuvem" }
-      $toPrint.Add(@{ Label = $label; Zpl = $zpl })
     } catch {
       $msg = $_.Exception.Message
       Write-Host "  [ERRO] ${id} (get ZPL): $msg" -ForegroundColor Red
       Set-Error -Id $id -Message $msg
+      continue   # problema só desta etiqueta — segue para a próxima
     }
-  }
-  if ($toPrint.Count -eq 0) { return }
 
-  # 3. Concatena todos os ZPLs e envia como um único job RAW
-  Write-Host "  → enviando $($toPrint.Count) etiqueta(s) em lote contínuo..." -ForegroundColor Cyan
-  $batchZpl = ($toPrint | ForEach-Object { $_.Zpl.Trim() }) -join "`r`n"
-  try {
-    Send-Zpl -Zpl $batchZpl
-  } catch {
-    $msg = $_.Exception.Message
-    Write-Host "  [ERRO] Lote falhou: $msg" -ForegroundColor Red
-    foreach ($item in $toPrint) { Set-Error -Id $item.Label.id -Message $msg }
-    return
-  }
+    # 3. Envia e confirma a saída na fila; só então marca impresso.
+    try {
+      Send-OneAndConfirm -Zpl ($zpl.Trim()) -TimeoutSec $ConfirmTimeoutSec
+    } catch {
+      $msg = $_.Exception.Message
+      Write-Host "  [ERRO] $id ($nome): $msg" -ForegroundColor Red
+      Set-Error -Id $id -Message $msg
+      # Falha de impressora (sem mídia/ribbon/pausa) afeta as próximas também:
+      # interrompe o lote. As ainda-não-reivindicadas seguem pendentes.
+      Write-Host "  [PARA] Impressora não confirmou — interrompendo; as demais seguem pendentes." -ForegroundColor Yellow
+      return
+    }
 
-  # 4. Marca todas como impressas
-  foreach ($item in $toPrint) {
-    $id   = $item.Label.id
-    $nome = $item.Label.recipientName
+    # 4. Marca impresso.
     try {
       Set-Printed -Id $id
       Write-Host "  [OK] $id ($nome)" -ForegroundColor Green
     } catch {
-      Write-Host "  [AVISO] $id impresso mas falhou ao marcar 'impresso': $($_.Exception.Message)" -ForegroundColor Yellow
+      Write-Host "  [AVISO] $id saiu mas falhou ao marcar 'impresso': $($_.Exception.Message)" -ForegroundColor Yellow
     }
   }
 }
@@ -284,6 +323,7 @@ Write-Host "================================" -ForegroundColor Cyan
 Write-Host " API.......: $ApiUrl"
 Write-Host " Impressora: $PrinterName"
 Write-Host " Intervalo.: $IntervalSeconds s"
+Write-Host " Confirmar.: até $ConfirmTimeoutSec s por etiqueta (uma a uma)"
 Write-Host " Modo......: $(if ($Once) { 'única passada' } else { 'loop contínuo (Ctrl+C p/ parar)' })"
 Write-Host ""
 

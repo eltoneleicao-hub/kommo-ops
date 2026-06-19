@@ -3,10 +3,18 @@
  *
  * Dado um conjunto de kommoLeadIds (lidos da etapa pelo widget), devolve o
  * status de etiqueta de cada um no banco. Usado pelo "Relatório do lote" pra
- * cruzar o funil (Kommo) com o que foi gerado/impresso aqui — e descobrir o que
+ * cruzar a etapa (Kommo) com o que foi gerado/impresso aqui — e descobrir o que
  * FALTA (inclusive leads que nunca geraram etiqueta, que não aparecem no banco).
  *
- * Payload: { secret, kommoLeadIds: (string|number)[] }
+ * IMPORTANTE — escopo por etapa: o mesmo lead pode ter UMA MaterialRequest por
+ * (lead, pipeline, stage) — ver @@unique no schema. Sem filtrar por etapa, um
+ * lead impresso numa etapa ANTERIOR apareceria como "impresso" na etapa atual
+ * (o RANK escolhe o melhor status entre as MRs do lead), MASCARANDO o que falta
+ * imprimir aqui. Por isso, quando o widget envia kommoPipelineId+kommoStageId,
+ * filtramos a MR pela etapa exata — aí há no máximo 1 MR por lead e o status é
+ * o desta etapa. Sem esses campos, mantém o comportamento antigo (retrocompat).
+ *
+ * Payload: { secret, kommoLeadIds: (string|number)[], kommoPipelineId?, kommoStageId? }
  * Resposta: { statuses: { [kommoLeadId]: { status, printedAt, errorMessage, regiao, missingFields } } }
  *   status: "impresso" | "pendente" | "processando" | "erro" | "sem_etiqueta"
  *   (leads ausentes do mapa = nunca geraram nada no banco → "não gerada")
@@ -25,9 +33,14 @@ export async function OPTIONS(request: NextRequest) {
 const payloadSchema = z.object({
   secret: z.string().min(1),
   kommoLeadIds: z.array(z.union([z.string(), z.number()])).min(1).max(5000),
+  // Opcionais (retrocompat): quando presentes, restringem a busca à etapa exata
+  // para não mascarar o status com etiquetas de outras etapas/pipelines do lead.
+  kommoPipelineId: z.union([z.string(), z.number()]).optional(),
+  kommoStageId: z.union([z.string(), z.number()]).optional(),
 });
 
-// Ordena "avanço" do status p/ escolher o melhor quando o lead tem MR em +1 etapa.
+// Desempate quando o lead tem MR em +1 etapa. Só atua no modo retrocompat (sem
+// pipeline+stage); com escopo por etapa há no máximo 1 MR por lead.
 const RANK: Record<string, number> = {
   impresso: 5, processando: 4, pendente: 3, erro: 2, sem_etiqueta: 1,
 };
@@ -44,8 +57,16 @@ export async function POST(request: NextRequest) {
   }
 
   const ids = parsed.data.kommoLeadIds.map(String);
+
+  // Escopo por etapa (quando o widget envia pipeline+stage). Com os dois, a
+  // @@unique([kommoLeadId, kommoPipelineId, kommoStageId]) garante <=1 MR por
+  // lead — o status é exatamente o desta etapa, sem mascaramento cross-etapa.
+  const stageScope: { kommoPipelineId?: string; kommoStageId?: string } = {};
+  if (parsed.data.kommoPipelineId != null) stageScope.kommoPipelineId = String(parsed.data.kommoPipelineId);
+  if (parsed.data.kommoStageId != null) stageScope.kommoStageId = String(parsed.data.kommoStageId);
+
   const reqs = await prisma.materialRequest.findMany({
-    where: { kommoLeadId: { in: ids } },
+    where: { kommoLeadId: { in: ids }, ...stageScope },
     include: { Label: true },
   });
 

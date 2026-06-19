@@ -8,6 +8,17 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
 
+  // Reaper: etiquetas presas em "processando" (o agente reivindicou e caiu antes
+  // de marcar impresso/erro) voltam para "pendente" e são reimpressas na próxima
+  // passada. Janela em minutos via REAP_PROCESSING_MINUTES (default 5) — uma
+  // impressão normal leva segundos, então "processando" há minutos = órfã.
+  const reapMinutes = Number(process.env.REAP_PROCESSING_MINUTES) || 5;
+  const cutoff = new Date(Date.now() - reapMinutes * 60_000);
+  await prisma.label.updateMany({
+    where: { printStatus: "processando", updatedAt: { lt: cutoff } },
+    data: { printStatus: "pendente" },
+  });
+
   const labels = await prisma.label.findMany({
     where: { printStatus: "pendente" },
     include: { MaterialRequest: true },
