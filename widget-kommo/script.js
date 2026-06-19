@@ -955,14 +955,9 @@ define(['jquery'], function ($) {
           $.ajax({
             url: apiBase() + '/api/labels/status-by-leads',
             method: 'POST', contentType: 'application/json',
-            // pipeline+stage: o status é o DESTA etapa (sem mascarar com etiqueta
-            // de outra etapa do mesmo lead). Ver status-by-leads/route.ts.
-            data: JSON.stringify({
-              secret: cfg().api_key,
-              kommoLeadIds: ids,
-              kommoPipelineId: String(lead.pipeline_id),
-              kommoStageId: String(lead.status_id)
-            }),
+            // cruza por lead (uma etiqueta por lead): o status segue o lead em
+            // qualquer etapa. Ver status-by-leads/route.ts.
+            data: JSON.stringify({ secret: cfg().api_key, kommoLeadIds: ids }),
             success: function (data) { renderStageReport(meta, (data && data.statuses) || {}); },
             error: function (xhr) { setStatus('<span style="color:#f44336">✗ Erro ao consultar status (HTTP ' + xhr.status + ')</span>'); }
           });
