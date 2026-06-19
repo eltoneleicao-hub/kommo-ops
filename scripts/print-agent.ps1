@@ -221,6 +221,57 @@ function Send-OneAndConfirm {
 }
 
 # ── Chamadas HTTP ─────────────────────────────────────────────────────────────
+# Envia o LOTE inteiro (ZPL de várias etiquetas concatenado) como UM job e só
+# retorna quando o job sai da fila sem erro — a Zebra imprime as etiquetas
+# emendadas, sem a pausa de confirmação por etiqueta. Mesma detecção de falha do
+# envio individual (OFFLINE / erro de job / timeout), porém no nível do LOTE.
+function Send-BatchAndConfirm {
+  param([string]$Zpl, [int]$Count, [int]$TimeoutSec = 0)
+  if ($TimeoutSec -le 0) { $TimeoutSec = $ConfirmTimeoutSec + (3 * $Count) }
+
+  $before = @(Get-PrintJob -PrinterName $PrinterName -ErrorAction SilentlyContinue |
+              Select-Object -ExpandProperty Id)
+  $bytes = [System.Text.Encoding]::UTF8.GetBytes($Zpl)
+  $sent = Get-Date
+  [RawPrinter]::SendBytes($PrinterName, $bytes)
+
+  $deadline = $sent.AddSeconds($TimeoutSec)
+  $appeared = $false
+  while ((Get-Date) -lt $deadline) {
+    Start-Sleep -Milliseconds 400
+
+    $wmi = Get-CimInstance Win32_Printer -Filter "Name='$PrinterName'" -ErrorAction SilentlyContinue
+    if ($wmi -and $wmi.WorkOffline) {
+      throw "Impressora ficou OFFLINE durante o lote — nao concluiu."
+    }
+
+    $jobs = @(Get-PrintJob -PrinterName $PrinterName -ErrorAction SilentlyContinue)
+
+    $bad = @($jobs | Where-Object { "$($_.JobStatus)" -match "Error|Paused|Blocked|PaperOut|UserIntervention" })
+    if ($bad.Count -gt 0) {
+      $st = (($bad | ForEach-Object { "$($_.JobStatus)" }) | Select-Object -Unique) -join ", "
+      $bad | Remove-PrintJob -ErrorAction SilentlyContinue
+      throw "Impressora nao concluiu o lote (status: $st). Verifique etiqueta/ribbon/tampa."
+    }
+
+    $mine = @($jobs | Where-Object { $before -notcontains $_.Id })
+    if ($mine.Count -gt 0) {
+      $appeared = $true
+      if (@($mine | Where-Object { "$($_.JobStatus)" -notmatch "Printed|Complete" }).Count -eq 0) {
+        $mine | Remove-PrintJob -ErrorAction SilentlyContinue
+        return
+      }
+    }
+    elseif ($appeared -or ((Get-Date) -gt $sent.AddSeconds(3))) {
+      return
+    }
+  }
+
+  @(Get-PrintJob -PrinterName $PrinterName -ErrorAction SilentlyContinue |
+    Where-Object { $before -notcontains $_.Id }) | Remove-PrintJob -ErrorAction SilentlyContinue
+  throw "Tempo esgotado ($TimeoutSec s) — lote preso na fila (impressora travada ou driver ZDesigner)."
+}
+
 function Get-Pending {
   $uri = "$ApiUrl/api/labels/pending?secret=$([uri]::EscapeDataString($Secret))"
   return Invoke-RestMethod -Uri $uri -Method Get -TimeoutSec 30
@@ -253,19 +304,18 @@ function Set-Error {
   } catch {}
 }
 
-# ── Processa as etiquetas, UMA por job, com confirmação de saída ─────────────
-# Cada etiqueta é reivindicada, impressa e confirmada individualmente. Só vira
-# "impresso" depois que o Windows confirma que o job concluiu sem erro. Assim, se
-# a mídia/ribbon acabar no meio, a etiqueta do momento vira ERRO (visível no
-# relatório) e o lote é interrompido — as demais seguem PENDENTES (não foram
-# reivindicadas) e voltam na próxima passada, sem "impresso" fantasma.
+# ── Processa as etiquetas em LOTE CONTÍNUO (um único job) ─────────────
+# Reivindica e busca o ZPL de TODAS, concatena e manda como UM job: a Zebra
+# imprime emendado, sem a pausa de confirmação por etiqueta. A confirmação é do
+# LOTE (checa OFFLINE/erro antes e depois). Limite assumido: se a mídia acabar no
+# meio, o lote inteiro é marcado p/ reimprimir (não aponta a etiqueta exata).
 function Process-Batch {
   param($Labels)
 
-  Write-Host "  → imprimindo até $($Labels.Count) etiqueta(s), uma a uma (com confirmação)..." -ForegroundColor Cyan
+  # FASE 1 — reivindica e busca o ZPL de TODAS (impressora ainda parada).
+  $ready = New-Object System.Collections.Generic.List[object]
   foreach ($label in $Labels) {
-    $id   = $label.id
-    $nome = $label.recipientName
+    $id = $label.id; $nome = $label.recipientName
 
     # 1. Claim (pendente -> processando). Já reivindicada/concluída => pula.
     try {
@@ -280,7 +330,6 @@ function Process-Batch {
     }
 
     # 2. Busca o ZPL desta etiqueta.
-    $zpl = $null
     try {
       $zpl = Get-Zpl -Id $id
       if (-not $zpl) { throw "ZPL vazio retornado pela nuvem" }
@@ -288,28 +337,45 @@ function Process-Batch {
       $msg = $_.Exception.Message
       Write-Host "  [ERRO] ${id} (get ZPL): $msg" -ForegroundColor Red
       Set-Error -Id $id -Message $msg
-      continue   # problema só desta etiqueta — segue para a próxima
+      continue
     }
 
-    # 3. Envia e confirma a saída na fila; só então marca impresso.
-    try {
-      Send-OneAndConfirm -Zpl ($zpl.Trim()) -TimeoutSec $ConfirmTimeoutSec
-    } catch {
-      $msg = $_.Exception.Message
-      Write-Host "  [ERRO] $id ($nome): $msg" -ForegroundColor Red
-      Set-Error -Id $id -Message $msg
-      # Falha de impressora (sem mídia/ribbon/pausa) afeta as próximas também:
-      # interrompe o lote. As ainda-não-reivindicadas seguem pendentes.
-      Write-Host "  [PARA] Impressora não confirmou — interrompendo; as demais seguem pendentes." -ForegroundColor Yellow
-      return
-    }
+    $ready.Add([pscustomobject]@{ id = $id; nome = $nome; zpl = $zpl.Trim() })
+  }
 
-    # 4. Marca impresso.
+  if ($ready.Count -eq 0) { return }
+
+  # FASE 2 — re-confirma impressora pronta ANTES de mandar (a busca leva alguns
+  # segundos; ela pode ter caído nesse meio-tempo). Se não estiver, marca o lote
+  # p/ reimprimir (volta na próxima passada) — nunca "impresso" fantasma.
+  if (-not (Test-PrinterReady)) {
+    $msg = "Impressora nao estava pronta na hora de imprimir o lote."
+    foreach ($r in $ready) { Set-Error -Id $r.id -Message $msg }
+    Write-Host "  [PARA] $msg ($($ready.Count) marcada(s) p/ reimprimir)" -ForegroundColor Yellow
+    return
+  }
+
+  # FASE 3 — concatena TODO o ZPL e manda como UM job: a Zebra imprime emendado,
+  # sem pausa entre etiquetas. Confirma o LOTE inteiro de uma vez.
+  Write-Host "  → imprimindo $($ready.Count) etiqueta(s) em LOTE CONTÍNUO (1 job)..." -ForegroundColor Cyan
+  $allZpl = ($ready | ForEach-Object { $_.zpl }) -join "`r`n"
+  try {
+    Send-BatchAndConfirm -Zpl $allZpl -Count $ready.Count
+  } catch {
+    $msg = $_.Exception.Message
+    Write-Host "  [ERRO] Lote não confirmou: $msg" -ForegroundColor Red
+    Write-Host "  [PARA] Marcando as $($ready.Count) do lote p/ reimprimir (as que já saíram podem duplicar)." -ForegroundColor Yellow
+    foreach ($r in $ready) { Set-Error -Id $r.id -Message $msg }
+    return
+  }
+
+  # FASE 4 — lote saiu OK: marca todas como impressas.
+  foreach ($r in $ready) {
     try {
-      Set-Printed -Id $id
-      Write-Host "  [OK] $id ($nome)" -ForegroundColor Green
+      Set-Printed -Id $r.id
+      Write-Host "  [OK] $($r.id) ($($r.nome))" -ForegroundColor Green
     } catch {
-      Write-Host "  [AVISO] $id saiu mas falhou ao marcar 'impresso': $($_.Exception.Message)" -ForegroundColor Yellow
+      Write-Host "  [AVISO] $($r.id) saiu mas falhou ao marcar 'impresso': $($_.Exception.Message)" -ForegroundColor Yellow
     }
   }
 }
@@ -339,7 +405,7 @@ Write-Host "================================" -ForegroundColor Cyan
 Write-Host " API.......: $ApiUrl"
 Write-Host " Impressora: $PrinterName"
 Write-Host " Intervalo.: $IntervalSeconds s"
-Write-Host " Confirmar.: até $ConfirmTimeoutSec s por etiqueta (uma a uma)"
+Write-Host " Modo impr.: LOTE CONTÍNUO (1 job; confirma o lote, base $ConfirmTimeoutSec s + 3s/etiqueta)"
 Write-Host " Modo......: $(if ($Once) { 'única passada' } else { 'loop contínuo (Ctrl+C p/ parar)' })"
 Write-Host ""
 
